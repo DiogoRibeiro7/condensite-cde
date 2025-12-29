@@ -1,0 +1,33 @@
+name: Feature Request
+about: Suggest an idea for condensite-torch
+labels: enhancement
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: What problem should we solve?
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: Why is this important?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: How might we implement it?
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+  - type: checkboxes
+    id: additional
+    attributes:
+      label: Additional Information
+      options:
+        - label: I would like to contribute a PR

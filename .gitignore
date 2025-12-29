@@ -18,8 +18,6 @@ venv/
 ENV/
 
 # Poetry
-poetry.lock
-poetry.toml
 
 # Pytest
 .pytest_cache/
