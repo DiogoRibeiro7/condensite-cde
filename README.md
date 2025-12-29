@@ -96,6 +96,7 @@ poetry run python examples/decision_metrics.py
 poetry run python examples/conformal_intervals.py
 poetry run python scripts/aux_sampling_benchmark.py > benchmark.json
 poetry run python scripts/calibration_report.py
+poetry run python benchmarks/run_all.py
 ```
 
 ## Getting Started

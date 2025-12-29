@@ -81,3 +81,9 @@ pretty = true
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+markers = [
+  "unit: fast, hermetic unit tests",
+  "integration: end-to-end flows on CPU",
+  "regression: snapshot/regression coverage tests",
+  "slow: long-running tests gated in CI",
+]
