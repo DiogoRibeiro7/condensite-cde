@@ -29,3 +29,5 @@ PASS — Remote `origin` points to `git@github.com:DiogoRibeiro7/condensite-cde.
 - Added Diogo to `CITATION.cff` and ensured the repository link matches the GitHub project.
 - Adjusted `README.md` heading to `# condensite-cde` and replaced the corrupted “Condensit‚” text with “Condensite”.
 - Ran `poetry check` after the edits; it completed with only the existing Poetry warnings about license syntax.
+
+- Verified CITATION.cff lists Diogo Ribeiro and the correct repository URL; updated AUTHORS.md to include Diogo Ribeiro <dfr@esmad.ipp.pt>.
