@@ -42,23 +42,29 @@ def kernel_h_np(
     return gaussian_kernel_np(y_arr - y_prime_arr, bandwidth)
 
 
-def gaussian_kernel_torch(delta: Tensor, bandwidth: float) -> Tensor:
+def gaussian_kernel_torch(delta: Tensor, bandwidth: float | Tensor) -> Tensor:
     """Evaluate a Gaussian kernel on Torch tensors."""
-    bw = _validate_bandwidth(bandwidth)
     deltas = delta.float()
-    norm = 1.0 / (bw * SQRT_TWO_PI)
-    return torch.exp(-0.5 * (deltas / bw) ** 2) * norm
-
-
-def kernel_h_torch(y: Tensor, y_prime: Tensor, bandwidth: float) -> Tensor:
-    """Compute K_h(y, y') for Torch tensors while supporting broadcasting."""
-    broadcasted = cast(
+    if isinstance(bandwidth, Tensor):
+        bw_tensor = bandwidth.to(deltas.device, deltas.dtype)
+        bw_tensor = torch.clamp(bw_tensor, min=1e-8)
+    else:
+        bw_scalar = _validate_bandwidth(float(bandwidth))
+        bw_tensor = torch.full_like(deltas, bw_scalar)
+    deltas_broadcasted, bw_broadcasted = cast(
         tuple[Tensor, Tensor],
-        tuple(
-            torch.broadcast_tensors(y.float(), y_prime.float()),  # type: ignore[no-untyped-call]
-        ),
+        tuple(torch.broadcast_tensors(deltas, bw_tensor)),  # type: ignore[no-untyped-call]
     )
-    y_tensor, y_prime_tensor = broadcasted
+    norm = 1.0 / (bw_broadcasted * SQRT_TWO_PI)
+    return torch.exp(-0.5 * (deltas_broadcasted / bw_broadcasted) ** 2) * norm
+
+
+def kernel_h_torch(y: Tensor, y_prime: Tensor, bandwidth: float | Tensor) -> Tensor:
+    """Compute K_h(y, y') for Torch tensors while supporting broadcasting."""
+    y_tensor, y_prime_tensor = cast(
+        tuple[Tensor, Tensor],
+        tuple(torch.broadcast_tensors(y.float(), y_prime.float())),  # type: ignore[no-untyped-call]
+    )
     return gaussian_kernel_torch(y_tensor - y_prime_tensor, bandwidth)
 
 

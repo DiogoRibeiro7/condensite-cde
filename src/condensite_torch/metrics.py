@@ -52,7 +52,7 @@ def crps_from_cdf(
     for row, target in zip(cdf_arr, y_true_arr, strict=True):
         indicator = (y_grid_arr >= target).astype(np.float64)
         error = (row - indicator) ** 2
-        scores.append(float(np.trapz(error, y_grid_arr)))
+        scores.append(float(np.trapezoid(error, y_grid_arr)))
     return float(np.mean(np.asarray(scores, dtype=np.float64)))
 
 

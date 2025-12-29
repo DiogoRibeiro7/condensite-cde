@@ -42,6 +42,7 @@ dev = [
 [tool.poetry]
 packages = [
     { include = "condensite_torch", from = "src" },
+    { include = "condensite_cde", from = "src" },
 ]
 
 [build-system]
@@ -72,7 +73,7 @@ preview = true
 python_version = "3.10"
 strict = true
 mypy_path = ["src"]
-packages = ["condensite_torch"]
+packages = ["condensite_torch", "condensite_cde"]
 warn_unused_configs = true
 show_error_codes = true
 pretty = true

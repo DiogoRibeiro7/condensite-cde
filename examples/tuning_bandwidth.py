@@ -12,6 +12,7 @@ except OSError as exc:
     print(f"Torch is unavailable; skipping example. Details: {exc}")
     sys.exit(0)
 
+from condensite_cde import make_y_grid
 from condensite_torch import CondensiteTorchCDE, CondensiteTorchCDEConfig, crps_from_cdf
 
 
@@ -28,7 +29,7 @@ def main() -> None:  # noqa: PLR0914
     split = int(0.8 * len(X))
     X_train, X_val = X[:split], X[split:]
     y_train, y_val = y[:split], y[split:]
-    grid = np.linspace(y.min() - 1.0, y.max() + 1.0, 80)
+    grid = make_y_grid(y_train, grid_size=80, mode="quantile")
     candidates = [0.05, 0.08, 0.12, 0.18]
     results = []
     for bw in candidates:

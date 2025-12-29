@@ -28,6 +28,7 @@ class MLPRegressorConfig:
     activation: ActivationFactory | nn.Module | None = None
     dropout: float = 0.0
     positive_output: bool = True
+    output_dim: int = 1
 
 
 class MLPRegressor(nn.Module):
@@ -43,7 +44,7 @@ class MLPRegressor(nn.Module):
             if config.dropout > 0:
                 layers.append(nn.Dropout(config.dropout))
             previous_dim = hidden
-        layers.append(nn.Linear(previous_dim, 1))
+        layers.append(nn.Linear(previous_dim, config.output_dim))
         self.model = nn.Sequential(*layers)
         self.positive_output = config.positive_output
 

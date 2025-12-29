@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import numpy as np
 import torch
 from torch import Tensor
 from torch.quasirandom import SobolEngine
 
 _FIXED_GRIDS: dict[tuple[int, float, float], Tensor] = {}
 _EXPECTED_SHAPE_LEN = 2
+_IMPORTANCE_EPS = 1e-6
 
 
 def _ensure_shape(shape: tuple[int, int]) -> tuple[int, int]:
@@ -58,6 +60,93 @@ def _uniform_base_sample(method: str, shape: tuple[int, int], seed: int | None) 
     raise ValueError(msg)
 
 
+class ImportanceSampler:
+    """Piecewise-uniform importance sampler built from empirical targets."""
+
+    def __init__(self, bin_edges: np.ndarray, bin_probs: np.ndarray) -> None:
+        if bin_edges.ndim != 1:
+            msg = "bin_edges must be 1-D."
+            raise ValueError(msg)
+        if bin_probs.ndim != 1:
+            msg = "bin_probs must be 1-D."
+            raise ValueError(msg)
+        if bin_edges.size != bin_probs.size + 1:
+            msg = "bin_edges must have len(probs) + 1 entries."
+            raise ValueError(msg)
+        probs = bin_probs.astype(np.float32, copy=False)
+        probs = np.clip(probs, _IMPORTANCE_EPS, None)
+        probs /= probs.sum()
+        edges = bin_edges.astype(np.float32, copy=False)
+        widths = np.diff(edges)
+        widths = np.clip(widths, _IMPORTANCE_EPS, None)
+        pdf = probs / widths
+        cdf = np.cumsum(probs)
+
+        self._bin_lefts = torch.from_numpy(edges[:-1])
+        self._bin_widths = torch.from_numpy(widths)
+        self._bin_probs = torch.from_numpy(probs)
+        self._bin_pdf = torch.from_numpy(pdf)
+        self._cdf = torch.from_numpy(cdf)
+
+    @classmethod
+    def from_array(
+        cls,
+        values: np.ndarray,
+        *,
+        bins: int = 64,
+        tail_bonus: float = 0.05,
+    ) -> ImportanceSampler:
+        arr = np.asarray(values, dtype=np.float64).reshape(-1)
+        if arr.size == 0:
+            raise ValueError("values must contain at least one entry")
+        clipped = np.clip(arr, 0.0, 1.0)
+        counts, edges = np.histogram(clipped, bins=bins, range=(0.0, 1.0))
+        counts = counts.astype(np.float64)
+        tail_mass = float(arr.size) * tail_bonus
+        counts[0] += tail_mass
+        counts[-1] += tail_mass
+        counts += _IMPORTANCE_EPS
+        probs = counts / counts.sum()
+        return cls(edges, probs)
+
+    def draw(
+        self,
+        shape: tuple[int, int],
+        *,
+        seed: int | None = None,
+        device: torch.device | str | None = None,
+    ) -> tuple[Tensor, Tensor]:
+        _ensure_shape(shape)
+        generator = _make_generator(seed)
+        base = torch.rand(shape, generator=generator, dtype=torch.float32)
+        base_flat = base.reshape(-1)
+        cdf = self._cdf.to(base_flat.device)
+        idx = torch.bucketize(base_flat, cdf, right=False)
+        probs = self._bin_probs.to(base_flat.device)[idx]
+        starts = torch.where(
+            idx == 0,
+            torch.zeros_like(base_flat),
+            cdf[idx - 1],
+        )
+        local = torch.where(
+            probs > 0,
+            (base_flat - starts) / probs,
+            torch.zeros_like(base_flat),
+        )
+        lefts = self._bin_lefts.to(base_flat.device)[idx]
+        widths = self._bin_widths.to(base_flat.device)[idx]
+        samples = lefts + local * widths
+        pdf = self._bin_pdf.to(base_flat.device)[idx]
+        weights = torch.where(pdf > 0, 1.0 / pdf, torch.ones_like(pdf))
+        weights = weights / torch.mean(weights)
+        samples = samples.reshape(shape)
+        weights = weights.reshape(shape)
+        if device is not None:
+            samples = samples.to(device=device)
+            weights = weights.to(device=device)
+        return samples, weights
+
+
 def sample_yprime(
     method: str,
     shape: tuple[int, int],
@@ -77,4 +166,4 @@ def sample_yprime(
     return scaled.to(device=device)
 
 
-__all__ = ("sample_yprime",)
+__all__ = ("ImportanceSampler", "sample_yprime")

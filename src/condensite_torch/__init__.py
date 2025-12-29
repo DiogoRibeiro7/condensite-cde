@@ -24,6 +24,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "kernel_h_torch": ("condensite_torch.kernels", "kernel_h_torch"),
     "nll_from_pdf": ("condensite_torch.metrics", "nll_from_pdf"),
     "crps_from_cdf": ("condensite_torch.metrics", "crps_from_cdf"),
+    "pit_values": ("condensite_torch.diagnostics", "pit_values"),
+    "coverage": ("condensite_torch.diagnostics", "coverage"),
+    "ConformalCDEWrapper": ("condensite_torch.conformal", "ConformalCDEWrapper"),
+    "AutoregressiveCondensite": ("condensite_torch.autoregressive", "AutoregressiveCondensite"),
 }
 
 
@@ -60,6 +64,9 @@ if TYPE_CHECKING:
         kernel_h_torch,
     )
     from .metrics import crps_from_cdf, nll_from_pdf
+    from .diagnostics import pit_values, coverage
+    from .conformal import ConformalCDEWrapper
+    from .autoregressive import AutoregressiveCondensite
     from .models import MLPRegressor, MLPRegressorConfig
     from .scalers import MinMaxScaler1D, StandardScaler
 
@@ -79,5 +86,9 @@ __all__ = (
     "kernel_h_np",
     "kernel_h_torch",
     "nll_from_pdf",
+    "pit_values",
+    "coverage",
+    "ConformalCDEWrapper",
+    "AutoregressiveCondensite",
     "sample_yprime",
 )
