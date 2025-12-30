@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+message: "If you use condensite-torch in your research, please cite it as below."
+title: "Condensite Torch: tabular conditional density estimation with streamed auxiliaries"
+type: software
+authors:
+  - given-names: Condensite
+    family-names: Contributors
+    email: opensource@condensite.ai
+  - given-names: Diogo
+    family-names: Ribeiro
+    email: dfr@esmad.ipp.pt
+repository-code: "https://github.com/diogoribeiro7/condensite-cde"
+license: MIT
+version: "0.1.0"
+date-released: 2025-12-22

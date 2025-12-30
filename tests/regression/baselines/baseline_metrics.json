@@ -1,0 +1,6 @@
+{
+  "generated": true,
+  "nll_expected": 0.5989727280919248,
+  "crps_expected": 0.2357037863965911,
+  "integral_mean_expected": 0.9999999579346935
+}

@@ -1,22 +1,36 @@
 [project]
-name = "condensite-torch"
+name = "condensite-cde"
 version = "0.1.0"
 description = "PyTorch tabular conditional density estimator."
 authors = [
-    { name = "Condensite Contributors", email = "opensource@condensite.ai" }
+    { name = "Condensite Contributors", email = "opensource@condensite.ai" },
+    { name = "Diogo Ribeiro", email = "dfr@esmad.ipp.pt" },
 ]
 license = { text = "MIT" }
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
+keywords = ["pytorch", "conditional-density", "tabular", "bayesian", "deep-learning"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
-    "torch (>=2.9.1,<3.0.0)",
-    "numpy (>=2.4.0,<3.0.0)",
+    "torch (>=2.5,<2.6)",
+    "numpy (>=1.26,<3.0.0)",
 ]
 
 [project.urls]
-Homepage = "https://github.com/condensite/condensite-torch"
-Documentation = "https://github.com/condensite/condensite-torch"
-Issues = "https://github.com/condensite/condensite-torch/issues"
+Homepage = "https://github.com/diogoribeiro7/condensite-cde"
+Repository = "https://github.com/diogoribeiro7/condensite-cde"
+Documentation = "https://github.com/diogoribeiro7/condensite-cde#readme"
+Issues = "https://github.com/diogoribeiro7/condensite-cde/issues"
 
 [dependency-groups]
 dev = [
@@ -28,6 +42,7 @@ dev = [
 [tool.poetry]
 packages = [
     { include = "condensite_torch", from = "src" },
+    { include = "condensite_cde", from = "src" },
 ]
 
 [build-system]
@@ -41,7 +56,7 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "ANN", "S", "PL", "RUF"]
-ignore = ["ANN101", "ANN102", "ANN401", "S101"]
+ignore = ["ANN401", "S101"]
 preview = true
 
 [tool.ruff.lint.per-file-ignores]
@@ -58,7 +73,7 @@ preview = true
 python_version = "3.10"
 strict = true
 mypy_path = ["src"]
-packages = ["condensite_torch"]
+packages = ["condensite_torch", "condensite_cde"]
 warn_unused_configs = true
 show_error_codes = true
 pretty = true
@@ -66,3 +81,9 @@ pretty = true
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+markers = [
+  "unit: fast, hermetic unit tests",
+  "integration: end-to-end flows on CPU",
+  "regression: snapshot/regression coverage tests",
+  "slow: long-running tests gated in CI",
+]
