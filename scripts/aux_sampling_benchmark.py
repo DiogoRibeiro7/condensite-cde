@@ -37,27 +37,36 @@ def evaluate_sampler(
     X_val: np.ndarray,
     y_val: np.ndarray,
     grid: np.ndarray,
+    seeds: tuple[int, ...],
 ) -> dict[str, float]:
-    config = CondensiteTorchCDEConfig(
-        hidden_sizes=(48, 48),
-        m_aux=48,
-        epochs=6,
-        patience=2,
-        batch_size=64,
-        lr=3e-3,
-        sampler=sampler,
-        val_fraction=0.0,
-        monitor_metric="val_nll",
-        normalization_lambda=0.1,
-    )
-    estimator = CondensiteTorchCDE(config=config, random_seed=11).fit(X_train, y_train)
-    pdf = estimator.predict_density(X_val, grid)
-    cdf = estimator.predict_cdf(X_val, grid)
-    metrics = {
-        "nll": nll_from_pdf(y_val, grid, pdf),
-        "crps": crps_from_cdf(y_val, grid, cdf),
+    nll_scores: list[float] = []
+    crps_scores: list[float] = []
+    for idx, seed in enumerate(seeds):
+        config = CondensiteTorchCDEConfig(
+            hidden_sizes=(48, 48),
+            m_aux=48,
+            epochs=6,
+            patience=2,
+            batch_size=64,
+            lr=3e-3,
+            sampler=sampler,
+            val_fraction=0.0,
+            monitor_metric="val_nll",
+            normalization_lambda=0.1,
+        )
+        estimator = CondensiteTorchCDE(config=config, random_seed=seed + idx).fit(X_train, y_train)
+        pdf = estimator.predict_density(X_val, grid)
+        cdf = estimator.predict_cdf(X_val, grid)
+        nll_scores.append(float(nll_from_pdf(y_val, grid, pdf)))
+        crps_scores.append(float(crps_from_cdf(y_val, grid, cdf)))
+    nll_arr = np.array(nll_scores, dtype=np.float64)
+    crps_arr = np.array(crps_scores, dtype=np.float64)
+    return {
+        "nll_mean": float(nll_arr.mean()),
+        "nll_std": float(nll_arr.std(ddof=0)),
+        "crps_mean": float(crps_arr.mean()),
+        "crps_std": float(crps_arr.std(ddof=0)),
     }
-    return metrics
 
 
 def main() -> None:
@@ -67,10 +76,11 @@ def main() -> None:
     y_train, y_val = y[:split], y[split:]
     grid = make_y_grid(y_train, grid_size=96, mode="quantile")
 
-    samplers = ("iid", "sobol", "stratified", "importance")
+    samplers = ("iid", "stratified", "lhs", "sobol", "importance")
+    seeds = (11, 23, 37)
     results: dict[str, dict[str, float]] = {}
     for sampler in samplers:
-        metrics = evaluate_sampler(sampler, X_train, y_train, X_val, y_val, grid)
+        metrics = evaluate_sampler(sampler, X_train, y_train, X_val, y_val, grid, seeds)
         results[sampler] = metrics
 
     print(json.dumps(results, indent=2))

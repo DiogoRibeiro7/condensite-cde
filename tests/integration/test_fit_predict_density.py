@@ -38,6 +38,6 @@ def test_fit_predict_density_produces_valid_pdf() -> None:
     pdf = estimator.predict_density(X_test, grid)
     assert pdf.shape == (X_test.shape[0], grid.size)
     assert np.all(pdf >= 0.0)
-    mass = np.trapz(pdf, x=grid, axis=1)
+    mass = np.trapezoid(pdf, x=grid, axis=1)
     assert np.all(np.isfinite(pdf))
-    assert np.all((mass >= 0.85) & (mass <= 1.15))
+    assert np.allclose(mass, 1.0, atol=0.02)

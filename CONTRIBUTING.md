@@ -12,10 +12,12 @@ Thanks for taking the time to contribute!
 - Follow Conventional Commits when possible (`feat:`, `fix:`, etc.).
 - Update `CHANGELOG.md` with a short summary under the **Unreleased** or new version heading.
 
-## Code Style
+## Code Style & Definition of Done
 - The project enforces Ruff and MyPy in CI.
 - Use type hints everywhere; prefer explicit return types.
 - Document public APIs with docstrings.
+- Follow the [Definition of Done](docs/definition-of-done.md): add/update tests, ensure CI passes, update docs, and watch backward compatibility for APIs and saved artifacts.
+- See [TESTING.md](TESTING.md) for commands that run unit/integration/regression suites and regenerate baselines before submitting a PR.
 
 ## Communication
 - For security concerns, follow the instructions in `SECURITY.md`.

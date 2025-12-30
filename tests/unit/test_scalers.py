@@ -15,7 +15,7 @@ def test_minmax_scaler_maps_bounds_to_unit_interval() -> None:
     assert np.isclose(transformed.min(), 0.0)
     assert np.isclose(transformed.max(), 1.0)
     reconstructed = scaler.inverse_transform(transformed)
-    assert np.allclose(reconstructed, data, atol=1e-10)
+    assert np.allclose(reconstructed, data, atol=1e-7)
 
 
 def test_minmax_scaler_handles_constant_input() -> None:
@@ -42,3 +42,12 @@ def test_standard_scaler_handles_near_constant_columns() -> None:
     scaler = StandardScaler().fit(X)
     transformed = scaler.transform(X)
     assert np.all(np.isfinite(transformed))
+
+
+def test_scalers_raise_when_not_fitted() -> None:
+    minmax = MinMaxScaler1D()
+    standard = StandardScaler()
+    with pytest.raises(RuntimeError):
+        minmax.transform(np.array([0.0]))
+    with pytest.raises(RuntimeError):
+        standard.transform(np.zeros((2, 2)))

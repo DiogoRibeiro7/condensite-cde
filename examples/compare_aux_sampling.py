@@ -31,7 +31,7 @@ def main() -> None:
     y_train, y_val = y[:split], y[split:]
     grid = make_y_grid(y_train, grid_size=80, mode="quantile")
 
-    methods = ["iid", "stratified", "sobol", "fixed_grid"]
+    methods = ["iid", "stratified", "lhs", "sobol", "fixed_grid"]
     for method in methods:
         config = CondensiteTorchCDEConfig(
             sampler=method,

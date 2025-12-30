@@ -39,6 +39,7 @@ def test_training_history_contains_validation_metrics(torch_available: bool) -> 
     for record in estimator.training_history:
         assert "val_crps" in record
         assert "val_nll" in record
+        assert "val_integral_error" in record
 
 
 def test_tuner_returns_best_configuration(torch_available: bool) -> None:

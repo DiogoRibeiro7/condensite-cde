@@ -6,7 +6,7 @@ import copy
 import json
 import math
 import os
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -43,12 +43,13 @@ class CondensiteTorchCDEConfig:
     adaptive_bandwidth: Literal["none", "x"] = "none"
     normalization_lambda: float = 0.0
     m_aux: int = 32
+    aux_chunk_size: int | None = None
     batch_size: int = 64
     epochs: int = 100
     lr: float = 1e-3
     weight_decay: float = 0.0
     patience: int = 10
-    sampler: str = "stratified"
+    sampler: str = "sobol"
     amp: bool = False
     val_fraction: float = 0.1
     device: str | torch.device = "cpu"
@@ -96,6 +97,9 @@ class CondensiteTorchCDE:
         self._y_train: NDArray[np.float64] | None = None
         self._best_head_index = 0
         self._importance_sampler: ImportanceSampler | None = None
+        self._best_epoch: int = -1
+        self._restored_best_epoch: int | None = None
+        self._current_epoch: int = -1
 
     # ------------------------------------------------------------------ Training
     def fit(  # noqa: PLR0912, PLR0914, PLR0915
@@ -177,18 +181,22 @@ class CondensiteTorchCDE:
 
         amp_enabled = self.config.amp and self._device.type == "cuda"
         scaler = GradScaler(enabled=amp_enabled)
-        best_state: dict[str, Tensor] | None = None
+        best_model_state: dict[str, Tensor] | None = None
+        best_bandwidth_state: dict[str, Tensor] | None = None
         best_metric = math.inf
         epochs_without_improvement = 0
         self.training_history.clear()
+        self._best_epoch = -1
+        self._restored_best_epoch = None
         monitor_metric = self.config.monitor_metric
-        valid_monitors = {"val_crps", "val_nll"}
+        valid_monitors = {"val_crps", "val_nll", "val_integral_error"}
         if monitor_metric not in valid_monitors:
             msg = f"monitor_metric must be one of {sorted(valid_monitors)}, got {monitor_metric!r}"
             raise ValueError(msg)
         val_grid: NDArray[np.float64] | None = None
 
         for epoch in range(self.config.epochs):
+            self._current_epoch = epoch
             train_loss = self._train_one_epoch(train_loader, optimizer, scaler, amp_enabled)
             record = {"epoch": epoch, "train_loss": train_loss}
             monitor_value = train_loss
@@ -200,14 +208,20 @@ class CondensiteTorchCDE:
                 cdf_val = self._cdf_from_pdf(pdf_val, val_grid)
                 val_crps = crps_from_cdf(y_val_eval, val_grid, cdf_val)
                 val_nll = nll_from_pdf(y_val_eval, val_grid, pdf_val)
+                val_mass = np.trapezoid(pdf_val, x=val_grid, axis=1)
+                val_integral_error = float(np.mean(np.abs(val_mass - 1.0)))
                 record["val_crps"] = val_crps
                 record["val_nll"] = val_nll
+                record["val_integral_error"] = val_integral_error
                 monitor_value = record[monitor_metric]
             self.training_history.append(record)
 
             if monitor_value < best_metric - 1e-6:
                 best_metric = monitor_value
-                best_state = copy.deepcopy(self.model.state_dict())
+                best_model_state = copy.deepcopy(self.model.state_dict())
+                if self.bandwidth_net is not None:
+                    best_bandwidth_state = copy.deepcopy(self.bandwidth_net.state_dict())
+                self._best_epoch = epoch
                 epochs_without_improvement = 0
             else:
                 epochs_without_improvement += 1
@@ -215,8 +229,11 @@ class CondensiteTorchCDE:
             if epochs_without_improvement >= self.config.patience:
                 break
 
-        if best_state is not None:
-            self.model.load_state_dict(best_state)
+        if best_model_state is not None:
+            self.model.load_state_dict(best_model_state)
+            if self.bandwidth_net is not None and best_bandwidth_state is not None:
+                self.bandwidth_net.load_state_dict(best_bandwidth_state)
+            self._restored_best_epoch = self._best_epoch
         if val_eval_data is not None:
             eval_grid = val_grid if val_grid is not None else self._default_y_grid()
         else:
@@ -275,21 +292,12 @@ class CondensiteTorchCDE:
         batches = 0
         for _batch_idx, (X_batch, y_batch) in enumerate(loader):
             optimizer.zero_grad(set_to_none=True)
-            features, targets, weights = self._prepare_training_batch(
-                X_batch.to(self._device),
-                y_batch.to(self._device),
-            )
             amp_context = torch.autocast("cuda") if amp_enabled else nullcontext()
             with amp_context:
-                predictions = self.model(features)
-                loss = self._weighted_mse_loss(predictions, targets, weights)
-                if self.config.normalization_lambda > 0.0:
-                    norm_penalty = self._normalization_penalty(
-                        predictions,
-                        X_batch.shape[0],
-                        weights,
-                    )
-                    loss = loss + self.config.normalization_lambda * norm_penalty
+                loss = self._compute_batch_loss(
+                    X_batch,
+                    y_batch,
+                )
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
@@ -297,34 +305,43 @@ class CondensiteTorchCDE:
             batches += 1
         return total_loss / max(batches, 1)
 
-    def _prepare_training_batch(
+    def _compute_batch_loss(
         self,
         X_batch: Tensor,
         y_batch: Tensor,
-    ) -> tuple[Tensor, Tensor, Tensor]:
-        cfg = self.config
-        batch_size = X_batch.shape[0]
-        m_aux = cfg.m_aux
+    ) -> Tensor:
+        assert self.model is not None
+        batch_inputs = X_batch.to(self._device)
+        targets_batch = y_batch.to(self._device)
+        batch_size = batch_inputs.shape[0]
         sampler_seed = self._next_sampler_seed()
-        y_prime, sample_weights = self._draw_yprime((batch_size, m_aux), sampler_seed)
-        adaptive = self._predict_adaptive_bandwidths(X_batch)
-        kernels_per_bandwidth = []
-        for idx, bandwidth in enumerate(self._bandwidths):
-            if adaptive is None:
-                effective_bw: float | Tensor = bandwidth
-            else:
-                head_scale = adaptive[:, idx].unsqueeze(1)
-                effective_bw = head_scale * bandwidth
-            kernels_per_bandwidth.append(
-                kernel_h_torch(y_batch.unsqueeze(1), y_prime, effective_bw),
-            )
-        kernels = torch.stack(kernels_per_bandwidth, dim=-1)
-        x_repeat = X_batch.repeat_interleave(m_aux, dim=0)
-        yprime_flat = y_prime.reshape(-1, 1)
-        features = torch.cat([x_repeat, yprime_flat], dim=1)
-        targets = kernels.reshape(-1, len(self._bandwidths))
-        weights = sample_weights.reshape(-1, 1)
-        return features, targets, weights
+        y_prime, sample_weights = self._draw_yprime((batch_size, self.config.m_aux), sampler_seed)
+        adaptive = self._predict_adaptive_bandwidths(batch_inputs)
+        chunk_size = self._effective_aux_chunk_size()
+        total_weighted_error = batch_inputs.new_tensor(0.0)
+        total_entries = 0
+        norm_acc = (
+            _NormalizationAccumulator(batch_size, len(self._bandwidths), self._device)
+            if self.config.normalization_lambda > 0.0
+            else None
+        )
+        for y_chunk, weights_chunk in self._iter_aux_chunks(y_prime, sample_weights, chunk_size):
+            features = self._combine_features(batch_inputs, y_chunk)
+            target_chunk = self._compute_kernel_targets(targets_batch, y_chunk, adaptive)
+            predictions = self.model(features)
+            weights_flat = weights_chunk.reshape(-1, 1)
+            squared_error = (predictions - target_chunk) ** 2
+            weighted = squared_error * weights_flat
+            total_weighted_error = total_weighted_error + weighted.sum()
+            total_entries += weights_flat.numel()
+            if norm_acc is not None:
+                preds_reshaped = predictions.view(batch_size, -1, len(self._bandwidths))
+                norm_acc.accumulate(preds_reshaped, weights_chunk.unsqueeze(-1))
+        loss = total_weighted_error / max(total_entries, 1)
+        if norm_acc is None:
+            return loss
+        penalty = norm_acc.penalty()
+        return loss + self.config.normalization_lambda * penalty
 
     def _next_sampler_seed(self) -> int:
         seed = self.random_seed + self._sampler_call
@@ -386,13 +403,14 @@ class CondensiteTorchCDE:
         X_scaled = self.x_scaler.transform(X_arr)
         y_scaled = self.y_scaler.transform(y_grid_arr)
         x_tensor = torch.from_numpy(X_scaled).to(self._device)
-        y_tensor = torch.from_numpy(y_scaled).to(self._device)
-        grid_size = y_tensor.shape[0]
+        y_tensor_scaled = torch.from_numpy(y_scaled).to(self._device)
+        y_tensor = torch.from_numpy(y_grid_arr.astype(np.float32)).to(self._device)
+        grid_size = y_tensor_scaled.shape[0]
 
         self.model.eval()
         with torch.no_grad():
             x_expanded = x_tensor.unsqueeze(1).expand(-1, grid_size, -1)
-            y_expanded = y_tensor.unsqueeze(0).expand(x_tensor.shape[0], -1).unsqueeze(-1)
+            y_expanded = y_tensor_scaled.unsqueeze(0).expand(x_tensor.shape[0], -1).unsqueeze(-1)
             features = torch.cat([x_expanded, y_expanded], dim=-1).reshape(
                 -1,
                 x_tensor.shape[1] + 1,
@@ -402,16 +420,10 @@ class CondensiteTorchCDE:
                 grid_size,
                 len(self._bandwidths),
             )
-        pdf_scaled = preds.cpu().numpy().astype(np.float64, copy=False)
         scale = max(float(self.y_scaler.data_range_), 1e-8)
-        density_heads = pdf_scaled / scale
-
-        if not self.config.positive_output:
-            density_heads = np.clip(density_heads, 0.0, None)
-
-        normalization = np.trapezoid(density_heads, x=y_grid_arr, axis=1)
-        normalization = np.clip(normalization, 1e-8, None)
-        density_heads /= normalization[:, None, :]
+        pdf_scaled = torch.clamp(preds / scale, min=1e-12)
+        normalized = self._normalize_pdf_heads(pdf_scaled, y_tensor)
+        density_heads = normalized.cpu().numpy().astype(np.float64, copy=False)
         combined = self._combine_heads(density_heads, head=head)
         result: NDArray[np.float64] = combined.astype(np.float64, copy=False)
         return result
@@ -560,6 +572,36 @@ class CondensiteTorchCDE:
             )
         return samples
 
+    def evaluate(
+        self,
+        X: NDArray[np.floating],
+        y: NDArray[np.floating],
+        *,
+        y_grid: NDArray[np.floating] | None = None,
+        head: int | str | None = None,
+    ) -> dict[str, float]:
+        """Compute NLL/CRPS/integral error metrics for (X, y)."""
+        self._ensure_fitted()
+        X_arr: NDArray[np.float64] = np.asarray(X, dtype=np.float64)
+        y_arr: NDArray[np.float64] = np.asarray(y, dtype=np.float64).reshape(-1)
+        if X_arr.shape[0] != y_arr.shape[0]:
+            msg = "X and y must contain the same number of samples."
+            raise ValueError(msg)
+        grid_arr = (
+            self._validate_y_grid(y_grid) if y_grid is not None else self._default_y_grid()
+        )
+        pdf = self.predict_density(X_arr, grid_arr, head=head)
+        cdf = self._cdf_from_pdf(pdf, grid_arr)
+        nll_value = nll_from_pdf(y_arr, grid_arr, pdf)
+        crps_value = crps_from_cdf(y_arr, grid_arr, cdf)
+        masses = np.trapezoid(pdf, x=grid_arr, axis=1)
+        integral_error = float(np.mean(np.abs(masses - 1.0)))
+        return {
+            "nll": float(nll_value),
+            "crps": float(crps_value),
+            "integral_error": integral_error,
+        }
+
     # ------------------------------------------------------------------ Persistence
     def save(self, path: os.PathLike[str] | str) -> None:
         """Persist model weights, configuration, and scalers to disk."""
@@ -575,7 +617,14 @@ class CondensiteTorchCDE:
             "input_dim": self._infer_model_input_dim(),
             "bandwidths": self._bandwidths,
             "best_head_index": int(self._best_head_index),
+            "best_epoch": int(self._best_epoch),
+            "restored_best_epoch": (
+                None if self._restored_best_epoch is None else int(self._restored_best_epoch)
+            ),
         }
+        if self.bandwidth_net is not None:
+            torch.save(self.bandwidth_net.state_dict(), target / _BANDWIDTH_MODEL_FILENAME)
+            metadata["has_bandwidth_net"] = True
         y_reference = self._summarize_y_reference()
         if y_reference is not None:
             metadata["y_reference"] = y_reference
@@ -616,7 +665,16 @@ class CondensiteTorchCDE:
         estimator.model = MLPRegressor(model_config).to(estimator._device)
         state_dict = torch.load(base / _MODEL_FILENAME, map_location=estimator._device)
         estimator.model.load_state_dict(state_dict)
+        if metadata.get("has_bandwidth_net") and estimator.config.adaptive_bandwidth == "x":
+            estimator.bandwidth_net = estimator._build_bandwidth_net(input_dim)
+            bw_path = base / _BANDWIDTH_MODEL_FILENAME
+            if bw_path.exists():
+                bw_state = torch.load(bw_path, map_location=estimator._device)
+                estimator.bandwidth_net.load_state_dict(bw_state)
         estimator._best_head_index = int(metadata.get("best_head_index", 0))
+        estimator._best_epoch = int(metadata.get("best_epoch", -1))
+        restored_epoch = metadata.get("restored_best_epoch")
+        estimator._restored_best_epoch = None if restored_epoch is None else int(restored_epoch)
         estimator.training_history.clear()
         estimator._fitted = True
         return estimator
@@ -642,14 +700,14 @@ class CondensiteTorchCDE:
         pdf: NDArray[np.float64],
         y_grid: NDArray[np.float64],
     ) -> NDArray[np.float64]:
-        diffs = np.diff(y_grid)
-        trapezoids = 0.5 * (pdf[:, 1:] + pdf[:, :-1]) * diffs
-        cdf = np.concatenate([np.zeros((pdf.shape[0], 1)), np.cumsum(trapezoids, axis=1)], axis=1)
-        cdf = np.maximum.accumulate(cdf, axis=1)
+        widths = CondensiteTorchCDE._point_widths_numpy(y_grid)
+        increments = pdf * widths[None, :]
+        cdf = np.cumsum(increments, axis=1)
         norm = np.clip(cdf[:, -1:], 1e-8, None)
-        cdf = np.clip(cdf / norm, 0.0, 1.0)
+        cdf = cdf / norm
+        cdf = np.clip(cdf, 0.0, 1.0)
         cdf[:, -1] = 1.0
-        return cdf.astype(np.float64, copy=False)
+        return cdf
 
     def _inverse_transform_samples(  # noqa: PLR0913
         self,
@@ -747,47 +805,94 @@ class CondensiteTorchCDE:
             raise ValueError(msg)
         return density_heads[..., index]
 
-    def _normalization_penalty(
-        self,
-        predictions: Tensor,
-        batch_size: int,
-        sample_weights: Tensor,
-    ) -> Tensor:
-        m_aux = self.config.m_aux
-        if m_aux <= 0:
-            return predictions.new_tensor(0.0)
-        num_heads = predictions.shape[-1]
-        if batch_size * m_aux != predictions.shape[0]:
-            msg = (
-                "Prediction tensor shape does not match batch size and m_aux. "
-                f"Expected {batch_size * m_aux}, received {predictions.shape[0]} rows."
-            )
-            raise RuntimeError(msg)
-        reshaped = predictions.reshape(batch_size, m_aux, num_heads)
-        weights = sample_weights.reshape(batch_size, m_aux, 1)
-        weights = weights / torch.clamp(weights.mean(dim=1, keepdim=True), min=1e-6)
-        integrals = torch.sum(reshaped * weights, dim=1) / torch.clamp(
-            weights.sum(dim=1),
-            min=1e-6,
-        )
-        penalty = (integrals - 1.0) ** 2
-        return penalty.mean()
-
-    def _weighted_mse_loss(
-        self,
-        predictions: Tensor,
-        targets: Tensor,
-        sample_weights: Tensor,
-    ) -> Tensor:
-        squared_error = (predictions - targets) ** 2
-        weighted = squared_error * sample_weights
-        return weighted.mean()
-
     def _predict_adaptive_bandwidths(self, X_batch: Tensor) -> Tensor | None:
         if self.bandwidth_net is None:
             return None
         raw = self.bandwidth_net(X_batch)
         return F.softplus(raw) + 1e-6
+
+    def _normalize_pdf_heads(self, pdf_heads: Tensor, y_grid: Tensor) -> Tensor:
+        widths = self._point_widths_tensor(y_grid).view(1, -1, 1)
+        log_widths = torch.log(widths)
+        logits = torch.log(torch.clamp(pdf_heads, min=1e-12)) + log_widths
+        weights = torch.softmax(logits, dim=1)
+        return weights / widths
+
+    @staticmethod
+    def _point_widths_tensor(y_grid: Tensor) -> Tensor:
+        if y_grid.ndim != 1 or y_grid.shape[0] < 2:
+            msg = "y_grid must be 1-D with at least two points."
+            raise ValueError(msg)
+        diffs = torch.diff(y_grid)
+        widths = torch.empty_like(y_grid)
+        widths[0] = diffs[0] / 2
+        widths[-1] = diffs[-1] / 2
+        if y_grid.shape[0] > 2:
+            widths[1:-1] = (diffs[:-1] + diffs[1:]) / 2
+        return torch.clamp(widths, min=1e-8)
+
+    @staticmethod
+    def _point_widths_numpy(y_grid: NDArray[np.float64]) -> NDArray[np.float64]:
+        arr = np.asarray(y_grid, dtype=np.float64).reshape(-1)
+        if arr.ndim != 1 or arr.size < 2:
+            msg = "y_grid must be 1-D with at least two points."
+            raise ValueError(msg)
+        diffs = np.diff(arr)
+        widths = np.empty_like(arr)
+        widths[0] = diffs[0] / 2
+        widths[-1] = diffs[-1] / 2
+        if arr.size > 2:
+            widths[1:-1] = (diffs[:-1] + diffs[1:]) / 2
+        return np.clip(widths, 1e-12, None)
+
+    def _effective_aux_chunk_size(self) -> int:
+        m_aux = max(1, int(self.config.m_aux))
+        chunk = self.config.aux_chunk_size
+        if chunk is None:
+            return min(m_aux, 64)
+        if chunk <= 0:
+            return m_aux
+        return min(m_aux, int(chunk))
+
+    def _iter_aux_chunks(
+        self,
+        y_prime: Tensor,
+        sample_weights: Tensor,
+        chunk_size: int,
+    ) -> Iterator[tuple[Tensor, Tensor]]:
+        if chunk_size <= 0:
+            chunk_size = y_prime.shape[1]
+        total = y_prime.shape[1]
+        for start in range(0, total, chunk_size):
+            end = min(start + chunk_size, total)
+            yield y_prime[:, start:end], sample_weights[:, start:end]
+
+    def _combine_features(self, X_batch: Tensor, y_prime_chunk: Tensor) -> Tensor:
+        chunk = y_prime_chunk.shape[1]
+        x_expanded = X_batch.unsqueeze(1).expand(-1, chunk, -1)
+        y_expanded = y_prime_chunk.unsqueeze(-1)
+        features = torch.cat([x_expanded, y_expanded], dim=-1)
+        return features.reshape(-1, X_batch.shape[1] + 1)
+
+    def _compute_kernel_targets(
+        self,
+        y_batch: Tensor,
+        y_prime_chunk: Tensor,
+        adaptive: Tensor | None,
+    ) -> Tensor:
+        y_targets = y_batch.unsqueeze(1)
+        kernels_per_bandwidth = []
+        for idx, bandwidth in enumerate(self._bandwidths):
+            if adaptive is None:
+                effective_bw: float | Tensor = bandwidth
+            else:
+                head_scale = adaptive[:, idx].unsqueeze(1)
+                effective_bw = head_scale * bandwidth
+            kernels_per_bandwidth.append(
+                kernel_h_torch(y_targets, y_prime_chunk, effective_bw),
+            )
+        kernels = torch.stack(kernels_per_bandwidth, dim=-1)
+        return kernels.reshape(-1, len(self._bandwidths))
 
     def _determine_best_head(
         self,
@@ -1026,6 +1131,21 @@ class CondensiteTorchCDE:
             msg = "Bandwidth values must be positive."
             raise ValueError(msg)
         return processed
+
+
+class _NormalizationAccumulator:
+    def __init__(self, batch_size: int, num_heads: int, device: torch.device) -> None:
+        self._weighted_sum = torch.zeros((batch_size, num_heads), device=device)
+        self._weight_sum = torch.zeros((batch_size, 1), device=device)
+
+    def accumulate(self, predictions: Tensor, weights: Tensor) -> None:
+        self._weighted_sum = self._weighted_sum + torch.sum(predictions * weights, dim=1)
+        self._weight_sum = self._weight_sum + torch.sum(weights, dim=1)
+
+    def penalty(self) -> Tensor:
+        integrals = self._weighted_sum / torch.clamp(self._weight_sum, min=1e-6)
+        penalty = (integrals - 1.0) ** 2
+        return penalty.mean()
 
 
 __all__: tuple[str, ...] = ("CondensiteTorchCDE", "CondensiteTorchCDEConfig")

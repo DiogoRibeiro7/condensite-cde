@@ -27,7 +27,13 @@ restored = CondensiteTorchCDE.load("artifacts/basic", map_location="cpu")
 assert np.allclose(pdf, restored.predict_density(X[:2], grid), atol=1e-5)
 ```
 
-Use `examples/basic_tabular.py` for a fuller walkthrough including validation metrics.
+Use `examples/basic_tabular.py` for a fuller walkthrough including validation metrics, and `examples/persistence_roundtrip.py` to see save/load + evaluation helpers in action.
+
+## Common Pitfalls
+
+- **Missing validation split**: set `val_fraction` or pass `(X_val, y_val)` when you want early stopping or `head="best"` selection; otherwise validation metrics stay `None`.
+- **Grid coverage**: always provide a `y_grid` that spans your target distribution; forgetting to pad min/max leads to clipped densities.
+- **Baseline refresh**: after making deterministic changes to density calculation, run `poetry run python scripts/generate_regression_baselines.py` before committing so regression snapshots stay in sync.
 
 ## What Is Condensite?
 
@@ -47,12 +53,14 @@ Use `examples/basic_tabular.py` for a fuller walkthrough including validation me
 - **Auxiliary count (`m_aux`)**: Use `64..256` for most problems; start small (64) for prototyping and scale up if densities look jagged.
 - **Bandwidth (`h`)**: Work in the scaled target space; `0.05..0.15` usually balances smoothness vs. fidelity. Sweep using `examples/tuning_bandwidth.py`.
 - **`y_grid` selection**: Provide a quantile-spaced grid (e.g., percentiles of the training target) to focus resolution where data mass lives; supplement with min/max padding.
-- **Sampling strategy**: Sobol QMC (`sampler="sobol"`) is the recommended baseline, followed by stratified sampling; `examples/compare_aux_sampling.py` demonstrates the trade-offs. Use `sampler="importance"` to reweight y' draws via the empirical target histogram for better tail coverage.
+- **Sampling strategy**: Sobol QMC (`sampler="sobol"`) is the recommended baseline (and default). Latin hypercube (`sampler="lhs"`) keeps one sample per bin with randomized permutations, while stratified sampling provides fixed-bin coverage; `examples/compare_aux_sampling.py` demonstrates the trade-offs. Use `sampler="importance"` to reweight y' draws via the empirical target histogram for better tail coverage.
 - **Auto tuning**: Run `condensite_cde.tune.tune_bandwidth_m_aux` (see `examples/tune_bandwidth.py`) to grid-search bandwidths and auxiliary counts using validation CRPS/NLL.
 - **Multi-bandwidth heads**: Set `bandwidths=[0.06, 0.12, 0.2]` to train one head per bandwidth; use `bandwidth_strategy="mean"` (or pass `head="mean"`, `head="best"`, or a head index when calling `predict_*`) to select how densities are combined at inference. `head="best"` reuses the validation metric (CRPS/NLL) to pick the sharpest head at inference.
 - **Adaptive bandwidths**: Switch on `adaptive_bandwidth="x"` to predict positive per-sample bandwidth scalings that modulate smoothing automatically while keeping compatibility with fixed-bandwidth training.
 - **Normalization penalty**: Tune `normalization_lambda>0` to add a differentiable squared-integral penalty so the raw heads stay close to valid PDFs even before post-hoc renormalization.
-- **Sampling benchmark**: `scripts/aux_sampling_benchmark.py` trains a small model with `sampler in {iid, sobol, stratified, importance}` and prints a JSON summary of CRPS/NLL so you can quantify the trade-offs.
+- **Evaluation helper**: Call `estimator.evaluate(X, y)` to obtain CRPS/NLL/integral-error diagnostics without writing boilerplate loops; `examples/persistence_roundtrip.py` shows how to pair it with save/load.
+- **Sampling benchmark**: `scripts/aux_sampling_benchmark.py` trains a small model with `sampler in {iid, stratified, lhs, sobol, importance}` and prints JSON means/std-devs of CRPS/NLL so you can quantify the trade-offs.
+- **Early stopping**: Use `val_fraction>0` or pass `(X_val, y_val)` along with `patience` / `monitor_metric` to enable validation-driven checkpoints; `examples/early_stopping.py` shows how to inspect the recorded metrics and restored epoch.
 - **Calibration diagnostics**: `scripts/calibration_report.py` emits PIT histograms and coverage stats so you can monitor probabilistic calibration over time.
 - **Split-conformal intervals**: Wrap the estimator with `ConformalCDEWrapper` to obtain finite-sample predictive intervals; see `examples/conformal_intervals.py`.
 - **AMP & GPU**: Set `amp=True` when training on CUDA devices; automatic casting and gradient scaling are enabled through PyTorch AMP.

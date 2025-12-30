@@ -44,6 +44,16 @@ def _uniform_base_sample(method: str, shape: tuple[int, int], seed: int | None) 
         jitter = torch.rand((batch, m_aux), generator=generator)
         return (bins + jitter) / float(m_aux)
 
+    if method_lower == "lhs":
+        bins = torch.arange(m_aux, dtype=torch.float32).repeat(batch, 1)
+        jitter = torch.rand((batch, m_aux), generator=generator)
+        base = (bins + jitter) / float(m_aux)
+        permuted = torch.empty_like(base)
+        for row in range(batch):
+            order = torch.randperm(m_aux, generator=generator)
+            permuted[row] = base[row, order]
+        return permuted
+
     if method_lower == "sobol":
         sobol_seed = seed if seed is not None else 0
         engine = SobolEngine(dimension=m_aux, scramble=True, seed=sobol_seed)  # type: ignore[no-untyped-call]
