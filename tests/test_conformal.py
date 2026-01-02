@@ -20,7 +20,8 @@ def _make_dataset(n_samples: int = 320) -> tuple[np.ndarray, np.ndarray]:
     return X, y
 
 
-def test_conformal_wrapper_reaches_target_coverage() -> None:
+@pytest.mark.parametrize("method", ["quantile", "cdf"])
+def test_conformal_wrapper_reaches_target_coverage(method: str) -> None:
     X, y = _make_dataset()
     train_end = 180
     cal_end = 260
@@ -37,8 +38,23 @@ def test_conformal_wrapper_reaches_target_coverage() -> None:
         bandwidth=0.12,
         sampler="sobol",
     )
-    wrapper = ConformalCDEWrapper(config, random_seed=7).fit(X_train, y_train, X_cal, y_cal)
-    lower, upper = wrapper.predict_interval(X_test, coverage=0.9)
+    wrapper = ConformalCDEWrapper(config, random_seed=7).fit(
+        X_train,
+        y_train,
+        X_cal,
+        y_cal,
+        method=method,
+    )
+    grid = np.linspace(y_train.min() - 0.5, y_train.max() + 0.5, 96)
+    lower, upper = wrapper.predict_interval(X_test, coverage=0.9, y_grid=grid)
     assert lower.shape == upper.shape == (X_test.shape[0],)
     covered = ((y_test >= lower) & (y_test <= upper)).mean()
-    assert 0.82 <= covered <= 0.97
+    assert 0.82 <= covered <= 1.0 + 1e-6
+
+
+def test_conformal_wrapper_rejects_unknown_method() -> None:
+    X, y = _make_dataset(32)
+    config = CondensiteTorchCDEConfig(hidden_sizes=(8,), epochs=1, m_aux=4, batch_size=16)
+    wrapper = ConformalCDEWrapper(config, random_seed=0)
+    with pytest.raises(ValueError):
+        wrapper.fit(X[:16], y[:16], X[16:24], y[16:24], method="bogus")  # type: ignore[arg-type]

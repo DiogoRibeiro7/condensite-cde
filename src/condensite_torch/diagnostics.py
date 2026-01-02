@@ -45,7 +45,7 @@ def pit_values(
     return np.clip(pit, 0.0, 1.0)
 
 
-def coverage(
+def coverage_rate(
     y_true: NDArray[np.floating],
     q_lo: NDArray[np.floating] | float,
     q_hi: NDArray[np.floating] | float,
@@ -62,6 +62,15 @@ def coverage(
         raise ValueError(msg)
     inside = (y_arr >= lo) & (y_arr <= hi)
     return float(np.mean(inside.astype(np.float64)))
+
+
+def coverage(
+    y_true: NDArray[np.floating],
+    q_lo: NDArray[np.floating] | float,
+    q_hi: NDArray[np.floating] | float,
+) -> float:
+    """Backward-compatible alias for coverage_rate."""
+    return coverage_rate(y_true, q_lo, q_hi)
 
 
 def _broadcast(
@@ -81,4 +90,4 @@ def _broadcast(
     return arr.astype(np.float64, copy=False)
 
 
-__all__ = ("coverage", "pit_values")
+__all__ = ("coverage", "coverage_rate", "pit_values")

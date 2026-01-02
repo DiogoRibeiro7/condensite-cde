@@ -40,17 +40,45 @@ def main() -> None:
         sampler="sobol",
         bandwidth=0.1,
     )
-    wrapper = ConformalCDEWrapper(config, random_seed=11).fit(X_train, y_train, X_cal, y_cal)
     coverage_target = 0.9
-    lower, upper = wrapper.predict_interval(X_test, coverage=coverage_target)
-    empirical = ((y_test >= lower) & (y_test <= upper)).mean()
+    grid = np.linspace(y_train.min() - 0.5, y_train.max() + 0.5, 96)
+
+    quantile_wrapper = ConformalCDEWrapper(config, random_seed=11).fit(
+        X_train,
+        y_train,
+        X_cal,
+        y_cal,
+        method="quantile",
+    )
+    q_lower, q_upper = quantile_wrapper.predict_interval(
+        X_test,
+        coverage=coverage_target,
+        y_grid=grid,
+    )
+    q_empirical = ((y_test >= q_lower) & (y_test <= q_upper)).mean()
+
+    cdf_wrapper = ConformalCDEWrapper(config, random_seed=11).fit(
+        X_train,
+        y_train,
+        X_cal,
+        y_cal,
+        method="cdf",
+    )
+    c_lower, c_upper = cdf_wrapper.predict_interval(
+        X_test,
+        coverage=coverage_target,
+        y_grid=grid,
+    )
+    c_empirical = ((y_test >= c_lower) & (y_test <= c_upper)).mean()
 
     print(f"Target coverage: {coverage_target:.2f}")
-    print(f"Empirical coverage on holdout: {empirical:.3f}")
+    print(f"Quantile method coverage: {q_empirical:.3f}")
+    print(f"CDF method coverage: {c_empirical:.3f}")
     for idx in range(min(5, X_test.shape[0])):
         print(
-            f"Sample {idx}: interval=({lower[idx]:.3f}, {upper[idx]:.3f}), "
-            f"obs={y_test[idx]:.3f}",
+            "Sample "
+            f"{idx}: quant=({q_lower[idx]:.3f}, {q_upper[idx]:.3f}), "
+            f"cdf=({c_lower[idx]:.3f}, {c_upper[idx]:.3f}), obs={y_test[idx]:.3f}",
         )
 
 

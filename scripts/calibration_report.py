@@ -15,7 +15,7 @@ except OSError as exc:  # pragma: no cover - environment dependent
 
 from condensite_cde import make_y_grid
 from condensite_torch import CondensiteTorchCDE, CondensiteTorchCDEConfig
-from condensite_torch.diagnostics import coverage, pit_values
+from condensite_torch.diagnostics import coverage_rate, pit_values
 
 
 def make_dataset(n_samples: int = 400) -> tuple[np.ndarray, np.ndarray]:
@@ -54,7 +54,7 @@ def main() -> None:
     for level in levels:
         tail = (1.0 - level) / 2.0
         quantiles = estimator.predict_quantile(X_val, [tail, 1.0 - tail], y_grid=grid)
-        cov = coverage(y_val, quantiles[:, 0], quantiles[:, 1])
+        cov = coverage_rate(y_val, quantiles[:, 0], quantiles[:, 1])
         coverage_results[f"p{int(level * 100):02d}"] = cov
 
     payload = {

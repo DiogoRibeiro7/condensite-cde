@@ -20,6 +20,7 @@ from condensite_torch import (
 from condensite_torch.aux_sampling import ImportanceSampler
 
 CDF_MONOTONIC_TOL = 1e-4
+MONOTONIC_TOL = 1e-6
 
 
 def _mean_integral_error(
@@ -217,7 +218,8 @@ def test_adaptive_bandwidth_option_produces_positive_values() -> None:
     assert estimator.bandwidth_net is not None
     assert estimator.x_scaler is not None
     batch = estimator.x_scaler.transform(X[:8]).astype(np.float32)
-    positives = estimator._predict_adaptive_bandwidths(torch.from_numpy(batch).to(estimator._device))
+    x_tensor = torch.from_numpy(batch).to(estimator._device)
+    positives = estimator._predict_adaptive_bandwidths(x_tensor)
     assert positives is not None
     assert torch.all(positives > 0)
 
@@ -276,18 +278,50 @@ def test_importance_sampling_strategy_trains_successfully() -> None:
     assert np.allclose(mass, 1.0, atol=0.25)
 
 
-def test_quantiles_are_monotone(trained_estimator) -> None:
+def test_quantiles_are_monotone_and_deterministic(trained_estimator) -> None:
     estimator, X, _y, grid = trained_estimator
-    quantiles = estimator.predict_quantile(X[:5], [0.1, 0.5, 0.9], y_grid=grid)
+    probs = [1e-4, 0.5, 0.999]
+    quantiles = estimator.predict_quantile(X[:5], probs, y_grid=grid)
+    repeat = estimator.predict_quantile(X[:5], probs, y_grid=grid)
     assert quantiles.shape == (5, 3)
-    assert np.all(np.diff(quantiles, axis=1) >= -1e-6)
+    assert np.all(np.diff(quantiles, axis=1) >= -MONOTONIC_TOL)
+    assert np.allclose(quantiles, repeat)
+
+
+def test_predict_interval_contains_median(trained_estimator) -> None:
+    estimator, X, _y, grid = trained_estimator
+    lo, hi = estimator.predict_interval(X[:6], coverage=0.8, y_grid=grid)
+    median = estimator.predict_quantile(X[:6], 0.5, y_grid=grid)
+    assert lo.shape == hi.shape == (6,)
+    assert lo.ndim == 1 and hi.ndim == 1
+    assert np.all(lo <= median + 1e-8)
+    assert np.all(hi >= median - 1e-8)
+    lo2, hi2 = estimator.predict_interval(X[:6], coverage=0.8, y_grid=grid)
+    assert np.allclose(lo, lo2)
+    assert np.allclose(hi, hi2)
 
 
 def test_right_tail_probability_decreases_with_threshold(trained_estimator) -> None:
     estimator, X, y, grid = trained_estimator
     low_threshold = float(y.min() - 0.5)
+    mid_threshold = float(np.median(y))
     high_threshold = float(y.max() + 0.5)
     tail_low = estimator.predict_tail_prob(X[:4], threshold=low_threshold, y_grid=grid)
+    tail_mid = estimator.predict_tail_prob(X[:4], threshold=mid_threshold, y_grid=grid)
     tail_high = estimator.predict_tail_prob(X[:4], threshold=high_threshold, y_grid=grid)
-    assert tail_low.shape == tail_high.shape == (4,)
-    assert np.all(tail_high <= tail_low)
+    assert tail_low.shape == tail_mid.shape == tail_high.shape == (4,)
+    assert np.all(tail_high <= tail_mid)
+    assert np.all(tail_mid <= tail_low)
+    assert np.all(tail_low >= 0.9)
+    assert np.all(tail_high <= 0.1)
+
+
+def test_expected_shortfall_exceeds_quantile(trained_estimator) -> None:
+    estimator, X, _y, grid = trained_estimator
+    alpha = 0.9
+    quantile = estimator.predict_quantile(X[:6], alpha, y_grid=grid)
+    es_values = estimator.expected_shortfall(X[:6], alpha=alpha, y_grid=grid)
+    assert quantile.shape == es_values.shape == (6,)
+    assert np.all(es_values >= quantile - 1e-6)
+    repeat = estimator.expected_shortfall(X[:6], alpha=alpha, y_grid=grid)
+    assert np.allclose(es_values, repeat)

@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import copy
 import math
+from typing import Literal, cast
+
 import numpy as np
 from numpy.typing import NDArray
 
+from .diagnostics import pit_values
 from .estimator import CondensiteTorchCDE, CondensiteTorchCDEConfig
 
 
@@ -28,6 +31,7 @@ class ConformalCDEWrapper:
         self._X_cal: NDArray[np.float64] | None = None
         self._y_cal: NDArray[np.float64] | None = None
         self._fitted = False
+        self._method: Literal["quantile", "cdf"] = "quantile"
 
     def fit(
         self,
@@ -35,6 +39,8 @@ class ConformalCDEWrapper:
         y_train: NDArray[np.floating],
         X_cal: NDArray[np.floating],
         y_cal: NDArray[np.floating],
+        *,
+        method: Literal["quantile", "cdf"] = "quantile",
     ) -> ConformalCDEWrapper:
         X_train_arr = np.asarray(X_train, dtype=np.float64)
         y_train_arr = np.asarray(y_train, dtype=np.float64).reshape(-1)
@@ -43,10 +49,15 @@ class ConformalCDEWrapper:
         if X_cal_arr.shape[0] != y_cal_arr.shape[0]:
             msg = "Calibration X and y must contain the same number of samples."
             raise ValueError(msg)
+        method_normalized = method.lower()
+        if method_normalized not in {"quantile", "cdf"}:
+            msg = f"method must be 'quantile' or 'cdf', got {method}"
+            raise ValueError(msg)
         self.estimator.fit(X_train_arr, y_train_arr)
         self._X_cal = X_cal_arr
         self._y_cal = y_cal_arr
         self._fitted = True
+        self._method = cast(Literal["quantile", "cdf"], method_normalized)
         return self
 
     def predict_interval(
@@ -63,29 +74,45 @@ class ConformalCDEWrapper:
             msg = f"coverage must lie in (0, 1), got {coverage}"
             raise ValueError(msg)
         alpha = 1.0 - float(coverage)
-        tail = alpha / 2.0
-        cal_slack = self._calibration_slack(
-            coverage=coverage,
-            tail=tail,
-            y_grid=y_grid,
-            head=head,
-        )
-        quantiles = self.estimator.predict_quantile(
-            X,
-            [tail, 1.0 - tail],
-            y_grid=y_grid,
-            head=head,
-        )
-        lower = quantiles[:, 0] - cal_slack
-        upper = quantiles[:, 1] + cal_slack
+        grid = self._resolve_y_grid(y_grid)
+        if self._method == "quantile":
+            tail = alpha / 2.0
+            cal_slack = self._quantile_slack(
+                coverage=coverage,
+                tail=tail,
+                y_grid=grid,
+                head=head,
+            )
+            quantiles = self.estimator.predict_quantile(
+                X,
+                [tail, 1.0 - tail],
+                y_grid=grid,
+                head=head,
+            )
+            lower = quantiles[:, 0] - cal_slack
+            upper = quantiles[:, 1] + cal_slack
+        else:
+            tail_prob = self._cdf_tail_probability(
+                alpha=alpha,
+                y_grid=grid,
+                head=head,
+            )
+            probs = np.array([tail_prob, 1.0 - tail_prob], dtype=np.float64)
+            quantiles = self.estimator.predict_quantile(
+                X,
+                probs,
+                y_grid=grid,
+                head=head,
+            )
+            lower, upper = quantiles[:, 0], quantiles[:, 1]
         return lower.astype(np.float64, copy=False), upper.astype(np.float64, copy=False)
 
-    def _calibration_slack(
+    def _quantile_slack(
         self,
         *,
         coverage: float,
         tail: float,
-        y_grid: NDArray[np.floating] | None,
+        y_grid: NDArray[np.float64],
         head: int | str | None,
     ) -> float:
         assert self._X_cal is not None
@@ -105,6 +132,33 @@ class ConformalCDEWrapper:
         n = sorted_scores.size
         rank = min(n - 1, max(0, int(math.ceil((n + 1) * coverage)) - 1))
         return float(sorted_scores[rank])
+
+    def _cdf_tail_probability(
+        self,
+        *,
+        alpha: float,
+        y_grid: NDArray[np.float64],
+        head: int | str | None,
+    ) -> float:
+        assert self._X_cal is not None
+        assert self._y_cal is not None
+        cdf = self.estimator.predict_cdf(
+            self._X_cal,
+            y_grid,
+            head=head,
+        )
+        pit = pit_values(self._y_cal, y_grid, cdf)
+        scores = np.minimum(pit, 1.0 - pit)
+        sorted_scores = np.sort(scores)
+        n = sorted_scores.size
+        rank = min(n - 1, max(0, int(math.ceil((n + 1) * alpha)) - 1))
+        tail = float(sorted_scores[rank])
+        return float(np.clip(tail, 1e-6, 0.5))
+
+    def _resolve_y_grid(self, provided: NDArray[np.floating] | None) -> NDArray[np.float64]:
+        if provided is not None:
+            return self.estimator._validate_y_grid(provided)  # noqa: SLF001
+        return self.estimator._default_y_grid()  # noqa: SLF001
 
     def _ensure_fitted(self) -> None:
         if not self._fitted:

@@ -21,13 +21,15 @@ grid = np.linspace(y.min() - 1.0, y.max() + 1.0, 96)
 config = CondensiteTorchCDEConfig(m_aux=64, bandwidth=0.12, epochs=8, patience=2)
 estimator = CondensiteTorchCDE(config=config, random_seed=7).fit(X, y)
 pdf = estimator.predict_density(X[:2], grid)
+quantiles = estimator.predict_quantile(X[:2], [0.1, 0.5, 0.9], y_grid=grid)
+interval_lo, interval_hi = estimator.predict_interval(X[:2], coverage=0.9, y_grid=grid)
 
 estimator.save("artifacts/basic")
 restored = CondensiteTorchCDE.load("artifacts/basic", map_location="cpu")
 assert np.allclose(pdf, restored.predict_density(X[:2], grid), atol=1e-5)
 ```
 
-Use `examples/basic_tabular.py` for a fuller walkthrough including validation metrics, and `examples/persistence_roundtrip.py` to see save/load + evaluation helpers in action.
+Use `examples/basic_tabular.py` for a fuller walkthrough including validation metrics, `examples/persistence_roundtrip.py` to see save/load + evaluation helpers in action, `examples/quantiles_and_intervals.py` for quantiles + predictive intervals, and `examples/tail_risk.py` for tail probability / expected shortfall APIs.
 
 ## Common Pitfalls
 
@@ -59,10 +61,11 @@ Use `examples/basic_tabular.py` for a fuller walkthrough including validation me
 - **Adaptive bandwidths**: Switch on `adaptive_bandwidth="x"` to predict positive per-sample bandwidth scalings that modulate smoothing automatically while keeping compatibility with fixed-bandwidth training.
 - **Normalization penalty**: Tune `normalization_lambda>0` to add a differentiable squared-integral penalty so the raw heads stay close to valid PDFs even before post-hoc renormalization.
 - **Evaluation helper**: Call `estimator.evaluate(X, y)` to obtain CRPS/NLL/integral-error diagnostics without writing boilerplate loops; `examples/persistence_roundtrip.py` shows how to pair it with save/load.
+- **Quantiles & tail risk**: `predict_quantile`, `predict_interval`, `predict_tail_prob`, and `expected_shortfall` expose decision metrics; see `examples/quantiles_and_intervals.py` and `examples/tail_risk.py`.
 - **Sampling benchmark**: `scripts/aux_sampling_benchmark.py` trains a small model with `sampler in {iid, stratified, lhs, sobol, importance}` and prints JSON means/std-devs of CRPS/NLL so you can quantify the trade-offs.
 - **Early stopping**: Use `val_fraction>0` or pass `(X_val, y_val)` along with `patience` / `monitor_metric` to enable validation-driven checkpoints; `examples/early_stopping.py` shows how to inspect the recorded metrics and restored epoch.
 - **Calibration diagnostics**: `scripts/calibration_report.py` emits PIT histograms and coverage stats so you can monitor probabilistic calibration over time.
-- **Split-conformal intervals**: Wrap the estimator with `ConformalCDEWrapper` to obtain finite-sample predictive intervals; see `examples/conformal_intervals.py`.
+- **Split-conformal intervals**: Wrap the estimator with `ConformalCDEWrapper` to obtain finite-sample predictive intervals, choosing `method="quantile"` or `"cdf"` for calibration style; see `examples/conformal_intervals.py`.
 - **AMP & GPU**: Set `amp=True` when training on CUDA devices; automatic casting and gradient scaling are enabled through PyTorch AMP.
 
 ## Automated Tuning
@@ -102,6 +105,8 @@ poetry run python examples/compare_aux_sampling.py
 poetry run python examples/tune_bandwidth.py
 poetry run python examples/decision_metrics.py
 poetry run python examples/conformal_intervals.py
+poetry run python examples/quantiles_and_intervals.py
+poetry run python examples/tail_risk.py
 poetry run python scripts/aux_sampling_benchmark.py > benchmark.json
 poetry run python scripts/calibration_report.py
 poetry run python benchmarks/run_all.py

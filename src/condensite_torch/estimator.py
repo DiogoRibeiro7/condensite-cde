@@ -466,6 +466,24 @@ class CondensiteTorchCDE:
             return quantiles[:, 0]
         return quantiles
 
+    def predict_interval(
+        self,
+        X: NDArray[np.floating],
+        coverage: float = 0.9,
+        *,
+        y_grid: NDArray[np.floating] | None = None,
+        head: int | str | None = None,
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Return central predictive interval (lo, hi) for the desired coverage."""
+        self._ensure_fitted()
+        if not 0.0 < coverage < 1.0:
+            msg = "coverage must be in the open interval (0, 1)."
+            raise ValueError(msg)
+        tail_mass = (1.0 - float(coverage)) / 2.0
+        probs = np.array([max(tail_mass, 0.0), min(1.0 - tail_mass, 1.0)], dtype=np.float64)
+        quantiles = self.predict_quantile(X, probs, y_grid=y_grid, head=head)
+        return quantiles[:, 0], quantiles[:, 1]
+
     def predict_tail_prob(
         self,
         X: NDArray[np.floating],
