@@ -55,13 +55,15 @@ Use `examples/basic_tabular.py` for a fuller walkthrough including validation me
 - **Auxiliary count (`m_aux`)**: Use `64..256` for most problems; start small (64) for prototyping and scale up if densities look jagged.
 - **Bandwidth (`h`)**: Work in the scaled target space; `0.05..0.15` usually balances smoothness vs. fidelity. Sweep using `examples/tuning_bandwidth.py`.
 - **`y_grid` selection**: Provide a quantile-spaced grid (e.g., percentiles of the training target) to focus resolution where data mass lives; supplement with min/max padding.
-- **Sampling strategy**: Sobol QMC (`sampler="sobol"`) is the recommended baseline (and default). Latin hypercube (`sampler="lhs"`) keeps one sample per bin with randomized permutations, while stratified sampling provides fixed-bin coverage; `examples/compare_aux_sampling.py` demonstrates the trade-offs. Use `sampler="importance"` to reweight y' draws via the empirical target histogram for better tail coverage.
+- **Sampling strategy**: Sobol QMC (`sampler="sobol"`) is the recommended baseline (and default). Latin hypercube (`sampler="lhs"`) keeps one sample per bin with randomized permutations, stratified sampling ensures fixed bins, and `sampler="fixed_grid"` reuses deterministic linspace points for debugging. `examples/compare_aux_sampling.py` covers the trade-offs, and `sampler="importance"` reweights y′ draws via the empirical target histogram for better tail coverage.
 - **Auto tuning**: Run `condensite_cde.tune.tune_bandwidth_m_aux` (see `examples/tune_bandwidth.py`) to grid-search bandwidths and auxiliary counts using validation CRPS/NLL.
 - **Multi-bandwidth heads**: Set `bandwidths=[0.06, 0.12, 0.2]` to train one head per bandwidth; use `bandwidth_strategy="mean"` (or pass `head="mean"`, `head="best"`, or a head index when calling `predict_*`) to select how densities are combined at inference. `head="best"` reuses the validation metric (CRPS/NLL) to pick the sharpest head at inference.
 - **Adaptive bandwidths**: Switch on `adaptive_bandwidth="x"` to predict positive per-sample bandwidth scalings that modulate smoothing automatically while keeping compatibility with fixed-bandwidth training.
 - **Normalization penalty**: Tune `normalization_lambda>0` to add a differentiable squared-integral penalty so the raw heads stay close to valid PDFs even before post-hoc renormalization.
 - **Evaluation helper**: Call `estimator.evaluate(X, y)` to obtain CRPS/NLL/integral-error diagnostics without writing boilerplate loops; `examples/persistence_roundtrip.py` shows how to pair it with save/load.
 - **Quantiles & tail risk**: `predict_quantile`, `predict_interval`, `predict_tail_prob`, and `expected_shortfall` expose decision metrics; see `examples/quantiles_and_intervals.py` and `examples/tail_risk.py`.
+- **Permutation importance**: `condensite_torch.permutation_importance` perturbs features and recomputes CRPS/NLL to quantify their impact; `examples/permutation_importance.py` prints mean/std importances for a toy dataset.
+- **What-if analysis**: `condensite_torch.what_if` mutates selected features and reports how quantiles/tails/pdf/cdf shift; `examples/what_if.py` shows a minimal counterfactual report.
 - **Sampling benchmark**: `scripts/aux_sampling_benchmark.py` trains a small model with `sampler in {iid, stratified, lhs, sobol, importance}` and prints JSON means/std-devs of CRPS/NLL so you can quantify the trade-offs.
 - **Early stopping**: Use `val_fraction>0` or pass `(X_val, y_val)` along with `patience` / `monitor_metric` to enable validation-driven checkpoints; `examples/early_stopping.py` shows how to inspect the recorded metrics and restored epoch.
 - **Calibration diagnostics**: `scripts/calibration_report.py` emits PIT histograms and coverage stats so you can monitor probabilistic calibration over time.
@@ -107,6 +109,8 @@ poetry run python examples/decision_metrics.py
 poetry run python examples/conformal_intervals.py
 poetry run python examples/quantiles_and_intervals.py
 poetry run python examples/tail_risk.py
+poetry run python examples/permutation_importance.py
+poetry run python examples/what_if.py
 poetry run python scripts/aux_sampling_benchmark.py > benchmark.json
 poetry run python scripts/calibration_report.py
 poetry run python benchmarks/run_all.py

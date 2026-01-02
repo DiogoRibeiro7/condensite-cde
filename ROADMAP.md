@@ -6,9 +6,9 @@
 
 1. **Issue: Calibration diagnostics & PIT coverage**
 
-  - _Scope_: Implement PIT histograms and coverage utilities with CLI hooks.
-  - _Acceptance criteria_: `scripts/calibration_report.py` emits PIT histograms + coverage JSON; unit tests cover PIT bounds; docs include usage example.
-  - _Labels_: tests, feature, docs.
+- _Scope_: Implement PIT histograms and coverage utilities with CLI hooks.
+- _Acceptance criteria_: `scripts/calibration_report.py` emits PIT histograms + coverage JSON; unit tests cover PIT bounds; docs include usage example.
+- _Labels_: tests, feature, docs.
 
 2. **Issue: Monotone CDF head without numerical fixes**
 

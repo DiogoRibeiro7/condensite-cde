@@ -27,6 +27,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "pit_values": ("condensite_torch.diagnostics", "pit_values"),
     "coverage": ("condensite_torch.diagnostics", "coverage"),
     "coverage_rate": ("condensite_torch.diagnostics", "coverage_rate"),
+    "permutation_importance": ("condensite_torch.interpretability", "permutation_importance"),
+    "PermutationImportanceResult": ("condensite_torch.interpretability", "PermutationImportanceResult"),
+    "what_if": ("condensite_torch.interpretability", "what_if"),
+    "WhatIfResult": ("condensite_torch.interpretability", "WhatIfResult"),
     "ConformalCDEWrapper": ("condensite_torch.conformal", "ConformalCDEWrapper"),
     "AutoregressiveCondensite": ("condensite_torch.autoregressive", "AutoregressiveCondensite"),
 }
@@ -66,6 +70,12 @@ if TYPE_CHECKING:
     )
     from .metrics import crps_from_cdf, nll_from_pdf
     from .diagnostics import pit_values, coverage, coverage_rate
+    from .interpretability import (
+        PermutationImportanceResult,
+        WhatIfResult,
+        permutation_importance,
+        what_if,
+    )
     from .conformal import ConformalCDEWrapper
     from .autoregressive import AutoregressiveCondensite
     from .models import MLPRegressor, MLPRegressorConfig
@@ -90,6 +100,10 @@ __all__ = (
     "pit_values",
     "coverage",
     "coverage_rate",
+    "permutation_importance",
+    "PermutationImportanceResult",
+    "what_if",
+    "WhatIfResult",
     "ConformalCDEWrapper",
     "AutoregressiveCondensite",
     "sample_yprime",
