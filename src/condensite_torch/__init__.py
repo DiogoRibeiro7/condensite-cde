@@ -24,6 +24,9 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "kernel_h_torch": ("condensite_torch.kernels", "kernel_h_torch"),
     "nll_from_pdf": ("condensite_torch.metrics", "nll_from_pdf"),
     "crps_from_cdf": ("condensite_torch.metrics", "crps_from_cdf"),
+    "wasserstein_1": ("condensite_torch.distribution_metrics", "wasserstein_1"),
+    "ks_distance": ("condensite_torch.distribution_metrics", "ks_distance"),
+    "js_divergence": ("condensite_torch.distribution_metrics", "js_divergence"),
     "pit_values": ("condensite_torch.diagnostics", "pit_values"),
     "coverage": ("condensite_torch.diagnostics", "coverage"),
     "coverage_rate": ("condensite_torch.diagnostics", "coverage_rate"),
@@ -33,6 +36,16 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "WhatIfResult": ("condensite_torch.interpretability", "WhatIfResult"),
     "ConformalCDEWrapper": ("condensite_torch.conformal", "ConformalCDEWrapper"),
     "AutoregressiveCondensite": ("condensite_torch.autoregressive", "AutoregressiveCondensite"),
+    "MultiTargetCondensite": ("condensite_torch.multi_target", "MultiTargetCondensite"),
+    "TabularPreprocessor": ("condensite_torch.preprocessing", "TabularPreprocessor"),
+    "TabularPreprocessorConfig": ("condensite_torch.preprocessing", "TabularPreprocessorConfig"),
+    "make_local_grid": ("condensite_torch.local_grids", "make_local_grid"),
+    "export_torchscript": ("condensite_torch.export", "export_torchscript"),
+    "export_onnx": ("condensite_torch.export", "export_onnx"),
+    "population_stability_index": ("condensite_torch.monitoring", "population_stability_index"),
+    "ks_drift": ("condensite_torch.monitoring", "ks_drift"),
+    "pit_histogram": ("condensite_torch.monitoring", "pit_histogram"),
+    "pit_drift": ("condensite_torch.monitoring", "pit_drift"),
 }
 
 
@@ -69,6 +82,7 @@ if TYPE_CHECKING:
         kernel_h_torch,
     )
     from .metrics import crps_from_cdf, nll_from_pdf
+    from .distribution_metrics import js_divergence, ks_distance, wasserstein_1
     from .diagnostics import pit_values, coverage, coverage_rate
     from .interpretability import (
         PermutationImportanceResult,
@@ -78,7 +92,12 @@ if TYPE_CHECKING:
     )
     from .conformal import ConformalCDEWrapper
     from .autoregressive import AutoregressiveCondensite
+    from .multi_target import MultiTargetCondensite
     from .models import MLPRegressor, MLPRegressorConfig
+    from .preprocessing import TabularPreprocessor, TabularPreprocessorConfig
+    from .local_grids import make_local_grid
+    from .export import export_onnx, export_torchscript
+    from .monitoring import ks_drift, pit_drift, pit_histogram, population_stability_index
     from .scalers import MinMaxScaler1D, StandardScaler
 
 
@@ -97,6 +116,9 @@ __all__ = (
     "kernel_h_np",
     "kernel_h_torch",
     "nll_from_pdf",
+    "wasserstein_1",
+    "ks_distance",
+    "js_divergence",
     "pit_values",
     "coverage",
     "coverage_rate",
@@ -104,7 +126,17 @@ __all__ = (
     "PermutationImportanceResult",
     "what_if",
     "WhatIfResult",
+    "TabularPreprocessor",
+    "TabularPreprocessorConfig",
+    "make_local_grid",
+    "export_torchscript",
+    "export_onnx",
+    "population_stability_index",
+    "ks_drift",
+    "pit_histogram",
+    "pit_drift",
     "ConformalCDEWrapper",
     "AutoregressiveCondensite",
+    "MultiTargetCondensite",
     "sample_yprime",
 )

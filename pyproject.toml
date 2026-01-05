@@ -32,6 +32,9 @@ Repository = "https://github.com/diogoribeiro7/condensite-cde"
 Documentation = "https://github.com/diogoribeiro7/condensite-cde#readme"
 Issues = "https://github.com/diogoribeiro7/condensite-cde/issues"
 
+[project.scripts]
+condensite = "condensite_torch.cli:main"
+
 [dependency-groups]
 dev = [
     "pytest (>=9.0.2,<10.0.0)",

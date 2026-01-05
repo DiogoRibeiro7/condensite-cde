@@ -8,7 +8,7 @@ import math
 import os
 from collections.abc import Iterator, Sequence
 from contextlib import nullcontext
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -26,6 +26,7 @@ from .aux_sampling import ImportanceSampler, sample_yprime
 from .kernels import kernel_h_torch
 from .metrics import crps_from_cdf, nll_from_pdf
 from .models import ActivationFactory, MLPRegressor, MLPRegressorConfig
+from .preprocessing import TabularPreprocessor, TabularPreprocessorConfig
 from .scalers import MinMaxScaler1D, StandardScaler
 
 
@@ -54,6 +55,9 @@ class CondensiteTorchCDEConfig:
     val_fraction: float = 0.1
     device: str | torch.device = "cpu"
     monitor_metric: Literal["val_crps", "val_nll"] = "val_crps"
+    preprocessor: TabularPreprocessorConfig | None = field(
+        default_factory=TabularPreprocessorConfig,
+    )
 
 
 _MODEL_FILENAME = "model.pt"
@@ -61,6 +65,7 @@ _CONFIG_FILENAME = "config.json"
 _SCALERS_FILENAME = "scalers.json"
 _METADATA_FILENAME = "metadata.json"
 _BANDWIDTH_MODEL_FILENAME = "bandwidth_net.pt"
+_PREPROCESSOR_FILENAME = "preprocessor.json"
 _Y_REFERENCE_POINTS = 512
 _ACTIVATION_REGISTRY: dict[str, type[nn.Module]] = {
     "relu": nn.ReLU,
@@ -110,7 +115,7 @@ class CondensiteTorchCDE:
         X_val: NDArray[np.floating] | None = None,
         y_val: NDArray[np.floating] | None = None,
     ) -> CondensiteTorchCDE:
-        X_arr: NDArray[np.float64] = np.asarray(X, dtype=np.float64)
+        X_arr = np.asarray(X, dtype=object)
         y_arr: NDArray[np.float64] = np.asarray(y, dtype=np.float64).reshape(-1)
         expected_dim = 2
         if X_arr.ndim != expected_dim:
@@ -126,10 +131,14 @@ class CondensiteTorchCDE:
         torch.manual_seed(self.random_seed)
         np.random.seed(self.random_seed)
 
-        self.x_scaler = StandardScaler().fit(X_arr)
+        if self.config.preprocessor is not None:
+            self.preprocessor = TabularPreprocessor(self.config.preprocessor)
+        else:
+            self.preprocessor = None
+        X_features = self._fit_preprocessor(X_arr)
         self.y_scaler = MinMaxScaler1D().fit(y_arr)
 
-        X_scaled: NDArray[np.float32] = self.x_scaler.transform(X_arr)
+        X_scaled: NDArray[np.float32] = X_features.astype(np.float32)
         y_scaled: NDArray[np.float32] = self.y_scaler.transform(y_arr)
 
         val_eval_data: tuple[NDArray[np.float64], NDArray[np.float64]] | None = None
@@ -138,12 +147,12 @@ class CondensiteTorchCDE:
             if val_idx is not None and val_idx.size > 0:
                 val_eval_data = (X_arr[val_idx], y_arr[val_idx])
         else:
-            X_val_arr = np.asarray(X_val, dtype=np.float64)
+            X_val_arr = np.asarray(X_val, dtype=object)
             y_val_arr = np.asarray(y_val, dtype=np.float64).reshape(-1)
             if X_val_arr.shape[0] != y_val_arr.shape[0]:
                 msg = "Validation X and y must match in the first dimension."
                 raise ValueError(msg)
-            self.x_scaler.transform(X_val_arr)  # Validate shape
+            self._transform_with_preprocessor(X_val_arr)  # Validate shape
             self.y_scaler.transform(y_val_arr)
             X_train_scaled, y_train_scaled = X_scaled, y_scaled
             if X_val_arr.size > 0:
@@ -154,7 +163,7 @@ class CondensiteTorchCDE:
         train_loader = self._build_loader(X_train_scaled, y_train_scaled, shuffle=True)
         self._configure_importance_sampler(y_train_scaled)
 
-        x_dim = X_arr.shape[1]
+        x_dim = X_scaled.shape[1]
         if self.config.adaptive_bandwidth == "x":
             self.bandwidth_net = self._build_bandwidth_net(x_dim)
         else:
@@ -377,14 +386,21 @@ class CondensiteTorchCDE:
     def predict_density(
         self,
         X: NDArray[np.floating],
-        y_grid: NDArray[np.floating],
+        y_grid: NDArray[np.floating] | None,
         *,
         head: int | str | None = None,
+        use_local_grid: bool = False,
+        local_grid_params: dict[str, float | int] | None = None,
     ) -> NDArray[np.float64]:
         self._ensure_fitted()
+        grid = y_grid
+        if grid is None and use_local_grid:
+            grid = self._build_local_grids(X, local_grid_params)
+        if grid is None:
+            grid = self._default_y_grid()
         return self._predict_density_internal(
             X,
-            y_grid,
+            grid,
             head=head,
         )
 
@@ -398,13 +414,15 @@ class CondensiteTorchCDE:
         assert self.x_scaler is not None
         assert self.y_scaler is not None
         assert self.model is not None
-        X_arr: NDArray[np.float64] = np.asarray(X, dtype=np.float64)
-        y_grid_arr = self._validate_y_grid(y_grid)
-        X_scaled = self.x_scaler.transform(X_arr)
-        y_scaled = self.y_scaler.transform(y_grid_arr)
+        X_arr = np.asarray(X, dtype=object)
+        grid_arr, local = self._process_y_grid(X_arr, y_grid)
+        X_scaled = self._transform_with_preprocessor(X_arr)
         x_tensor = torch.from_numpy(X_scaled).to(self._device)
+        if local:
+            return self._predict_density_local(x_tensor, grid_arr, head=head)
+        y_scaled = self.y_scaler.transform(grid_arr)
         y_tensor_scaled = torch.from_numpy(y_scaled).to(self._device)
-        y_tensor = torch.from_numpy(y_grid_arr.astype(np.float32)).to(self._device)
+        y_tensor = torch.from_numpy(grid_arr.astype(np.float32)).to(self._device)
         grid_size = y_tensor_scaled.shape[0]
 
         self.model.eval()
@@ -428,15 +446,68 @@ class CondensiteTorchCDE:
         result: NDArray[np.float64] = combined.astype(np.float64, copy=False)
         return result
 
+    def _predict_density_local(
+        self,
+        x_tensor: Tensor,
+        y_grids: NDArray[np.float64],
+        *,
+        head: int | str | None,
+    ) -> NDArray[np.float64]:
+        assert self.y_scaler is not None
+        assert self.model is not None
+        n_rows, grid_size = y_grids.shape
+        y_scaled = self.y_scaler.transform(y_grids.reshape(-1)).reshape(n_rows, grid_size)
+        y_scaled_tensor = torch.from_numpy(y_scaled.astype(np.float32)).to(self._device)
+        features: list[Tensor] = []
+        counts: list[int] = []
+        for row in range(n_rows):
+            count = grid_size
+            counts.append(count)
+            x_row = x_tensor[row].unsqueeze(0).expand(count, -1)
+            y_row_scaled = y_scaled_tensor[row].unsqueeze(1)
+            features.append(torch.cat([x_row, y_row_scaled], dim=1))
+        concatenated = torch.cat(features, dim=0)
+        scale = max(float(self.y_scaler.data_range_), 1e-8)
+        self.model.eval()
+        with torch.no_grad():
+            preds = torch.clamp(self.model(concatenated) / scale, min=1e-12)
+        start = 0
+        row_heads: list[np.ndarray] = []
+        for row, count in enumerate(counts):
+            chunk = preds[start : start + count]
+            y_row = torch.from_numpy(y_grids[row].astype(np.float32)).to(self._device)
+            normalized = self._normalize_pdf_heads_row(chunk, y_row)
+            row_heads.append(normalized.cpu().numpy())
+            start += count
+        density_heads = np.stack(row_heads, axis=0)
+        combined = self._combine_heads(density_heads, head=head)
+        return combined.astype(np.float64, copy=False)
+
     def predict_cdf(
         self,
         X: NDArray[np.floating],
-        y_grid: NDArray[np.floating],
+        y_grid: NDArray[np.floating] | None,
         *,
         head: int | str | None = None,
+        use_local_grid: bool = False,
+        local_grid_params: dict[str, float | int] | None = None,
     ) -> NDArray[np.float64]:
-        pdf = self.predict_density(X, y_grid, head=head)
-        y_grid_arr = self._validate_y_grid(y_grid)
+        pdf = self.predict_density(
+            X,
+            y_grid,
+            head=head,
+            use_local_grid=use_local_grid,
+            local_grid_params=local_grid_params,
+        )
+        grid = y_grid
+        if grid is None:
+            grid = self._default_y_grid()
+        if isinstance(grid, np.ndarray) and grid.ndim == 2:
+            cdfs = np.empty_like(pdf)
+            for idx in range(pdf.shape[0]):
+                cdfs[idx] = self._cdf_from_pdf(pdf[idx : idx + 1], grid[idx])[0]
+            return cdfs
+        y_grid_arr = self._validate_y_grid(grid)
         return self._cdf_from_pdf(pdf, y_grid_arr)
 
     def predict_quantile(
@@ -597,19 +668,36 @@ class CondensiteTorchCDE:
         *,
         y_grid: NDArray[np.floating] | None = None,
         head: int | str | None = None,
+        use_local_grid: bool = False,
+        local_grid_params: dict[str, float | int] | None = None,
     ) -> dict[str, float]:
         """Compute NLL/CRPS/integral error metrics for (X, y)."""
         self._ensure_fitted()
-        X_arr: NDArray[np.float64] = np.asarray(X, dtype=np.float64)
+        X_arr = np.asarray(X, dtype=object)
         y_arr: NDArray[np.float64] = np.asarray(y, dtype=np.float64).reshape(-1)
         if X_arr.shape[0] != y_arr.shape[0]:
             msg = "X and y must contain the same number of samples."
             raise ValueError(msg)
-        grid_arr = (
-            self._validate_y_grid(y_grid) if y_grid is not None else self._default_y_grid()
+        grid = y_grid
+        if grid is None and use_local_grid:
+            grid = self._build_local_grids(X_arr, local_grid_params)
+        if grid is None:
+            grid = self._default_y_grid()
+        pdf = self.predict_density(
+            X_arr,
+            grid,
+            head=head,
+            use_local_grid=use_local_grid,
+            local_grid_params=local_grid_params,
         )
-        pdf = self.predict_density(X_arr, grid_arr, head=head)
-        cdf = self._cdf_from_pdf(pdf, grid_arr)
+        if isinstance(grid, np.ndarray) and grid.ndim == 2:
+            cdf = np.empty_like(pdf)
+            for idx in range(pdf.shape[0]):
+                cdf[idx] = self._cdf_from_pdf(pdf[idx : idx + 1], grid[idx])[0]
+            grid_arr = grid
+        else:
+            grid_arr = self._validate_y_grid(grid)
+            cdf = self._cdf_from_pdf(pdf, grid_arr)
         nll_value = nll_from_pdf(y_arr, grid_arr, pdf)
         crps_value = crps_from_cdf(y_arr, grid_arr, cdf)
         masses = np.trapezoid(pdf, x=grid_arr, axis=1)
@@ -630,6 +718,9 @@ class CondensiteTorchCDE:
         torch.save(self.model.state_dict(), target / _MODEL_FILENAME)
         self._write_json(target / _CONFIG_FILENAME, self._config_to_dict(self.config))
         self._write_json(target / _SCALERS_FILENAME, self._scalers_to_dict())
+        preprocessor_payload = self._preprocessor_to_dict()
+        if preprocessor_payload is not None:
+            self._write_json(target / _PREPROCESSOR_FILENAME, preprocessor_payload)
         metadata: dict[str, Any] = {
             "random_seed": self.random_seed,
             "input_dim": self._infer_model_input_dim(),
@@ -659,6 +750,8 @@ class CondensiteTorchCDE:
         base = Path(path)
         config_dict = cls._read_json(base / _CONFIG_FILENAME)
         scalers_dict = cls._read_json(base / _SCALERS_FILENAME)
+        preprocessor_path = base / _PREPROCESSOR_FILENAME
+        preprocessor_data = cls._read_json(preprocessor_path) if preprocessor_path.exists() else None
         metadata = cls._read_json(base / _METADATA_FILENAME)
         config = cls._config_from_dict(config_dict)
         random_seed = int(metadata.get("random_seed", 0))
@@ -667,6 +760,10 @@ class CondensiteTorchCDE:
             estimator._device = torch.device(map_location)
             estimator.config.device = estimator._device
         estimator._set_bandwidths(metadata.get("bandwidths"))
+        if preprocessor_data is not None:
+            estimator.preprocessor = TabularPreprocessor.from_dict(preprocessor_data)
+        else:
+            estimator.preprocessor = None
         estimator.x_scaler = cls._standard_scaler_from_dict(scalers_dict["x"])
         estimator.y_scaler = cls._minmax_scaler_from_dict(scalers_dict["y"])
         y_reference = metadata.get("y_reference")
@@ -835,6 +932,13 @@ class CondensiteTorchCDE:
         logits = torch.log(torch.clamp(pdf_heads, min=1e-12)) + log_widths
         weights = torch.softmax(logits, dim=1)
         return weights / widths
+
+    def _normalize_pdf_heads_row(self, pdf_row: Tensor, y_grid_row: Tensor) -> Tensor:
+        widths = self._point_widths_tensor(y_grid_row)
+        log_widths = torch.log(widths).unsqueeze(-1)
+        logits = torch.log(torch.clamp(pdf_row, min=1e-12)) + log_widths
+        weights = torch.softmax(logits, dim=0)
+        return weights / widths.unsqueeze(-1)
 
     @staticmethod
     def _point_widths_tensor(y_grid: Tensor) -> Tensor:
@@ -1038,6 +1142,11 @@ class CondensiteTorchCDE:
             },
         }
 
+    def _preprocessor_to_dict(self) -> dict[str, Any] | None:
+        if self.preprocessor is None:
+            return None
+        return self.preprocessor.to_dict()
+
     @staticmethod
     def _standard_scaler_from_dict(data: dict[str, Any]) -> StandardScaler:
         scaler = StandardScaler()
@@ -1055,6 +1164,48 @@ class CondensiteTorchCDE:
         scaler.eps = float(data.get("eps", scaler.eps))
         scaler.fitted_ = True
         return scaler
+
+    def _fit_preprocessor(self, X: np.ndarray) -> NDArray[np.float64]:
+        if self.preprocessor is not None:
+            features = self.preprocessor.fit_transform(X)
+        else:
+            features = np.asarray(X, dtype=np.float64)
+        self.x_scaler = StandardScaler().fit(features)
+        return self.x_scaler.transform(features)
+
+    def _transform_with_preprocessor(self, X: np.ndarray) -> NDArray[np.float32]:
+        assert self.x_scaler is not None
+        if self.preprocessor is not None:
+            features = self.preprocessor.transform(X)
+        else:
+            features = np.asarray(X, dtype=np.float64)
+        return self.x_scaler.transform(features).astype(np.float32)
+
+    def _build_local_grids(
+        self,
+        X: NDArray[np.object_],
+        params: dict[str, float | int] | None,
+    ) -> NDArray[np.float64]:
+        from .local_grids import make_local_grid
+
+        config = params or {}
+        grid_size = int(config.get("grid_size", 64))
+        q_low = float(config.get("q_low", 0.01))
+        q_high = float(config.get("q_high", 0.99))
+        padding = float(config.get("padding", 0.1))
+        reference = config.get("reference_grid")
+        y_grid_np = None
+        if reference is not None:
+            y_grid_np = np.asarray(reference, dtype=np.float64)
+        return make_local_grid(
+            self,
+            X,
+            grid_size=grid_size,
+            q_low=q_low,
+            q_high=q_high,
+            padding=padding,
+            y_grid=y_grid_np,
+        )
 
     def _config_to_dict(self, config: CondensiteTorchCDEConfig) -> dict[str, Any]:
         data = asdict(config)
@@ -1130,6 +1281,25 @@ class CondensiteTorchCDE:
             msg = "y_grid must be strictly increasing."
             raise ValueError(msg)
         return arr
+
+    def _process_y_grid(
+        self,
+        X: NDArray[object],
+        y_grid: NDArray[np.floating],
+    ) -> tuple[NDArray[np.float64], bool]:
+        arr = np.asarray(y_grid, dtype=np.float64)
+        if arr.ndim == 1:
+            return self._validate_y_grid(arr), False
+        if arr.ndim != 2:
+            msg = "y_grid must be 1-D or 2-D."
+            raise ValueError(msg)
+        if arr.shape[0] != X.shape[0]:
+            msg = f"y_grid with shape {arr.shape} must match X rows ({X.shape[0]})."
+            raise ValueError(msg)
+        if np.any(np.diff(arr, axis=1) <= 0):
+            msg = "All per-row grids must be strictly increasing."
+            raise ValueError(msg)
+        return arr.astype(np.float64, copy=False), True
 
     def _set_bandwidths(self, override: Sequence[float] | None = None) -> None:
         self._bandwidths = self._resolve_bandwidths(override)

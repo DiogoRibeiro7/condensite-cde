@@ -64,6 +64,18 @@ Use `examples/basic_tabular.py` for a fuller walkthrough including validation me
 - **Quantiles & tail risk**: `predict_quantile`, `predict_interval`, `predict_tail_prob`, and `expected_shortfall` expose decision metrics; see `examples/quantiles_and_intervals.py` and `examples/tail_risk.py`.
 - **Permutation importance**: `condensite_torch.permutation_importance` perturbs features and recomputes CRPS/NLL to quantify their impact; `examples/permutation_importance.py` prints mean/std importances for a toy dataset.
 - **What-if analysis**: `condensite_torch.what_if` mutates selected features and reports how quantiles/tails/pdf/cdf shift; `examples/what_if.py` shows a minimal counterfactual report.
+- **Tabular preprocessing**: Mixed numeric/categorical inputs are handled automatically via `TabularPreprocessorConfig` (median/mode imputation, optional missing indicators, one-hot with deterministic ordering). See `examples/tabular_preprocessing.py` or configure explicitly:
+
+```python
+from condensite_torch import CondensiteTorchCDEConfig, TabularPreprocessorConfig
+
+config = CondensiteTorchCDEConfig(
+    preprocessor=TabularPreprocessorConfig(
+        add_missing_indicator=True,
+        handle_unknown="use_unknown",
+    ),
+)
+```
 - **Sampling benchmark**: `scripts/aux_sampling_benchmark.py` trains a small model with `sampler in {iid, stratified, lhs, sobol, importance}` and prints JSON means/std-devs of CRPS/NLL so you can quantify the trade-offs.
 - **Early stopping**: Use `val_fraction>0` or pass `(X_val, y_val)` along with `patience` / `monitor_metric` to enable validation-driven checkpoints; `examples/early_stopping.py` shows how to inspect the recorded metrics and restored epoch.
 - **Calibration diagnostics**: `scripts/calibration_report.py` emits PIT histograms and coverage stats so you can monitor probabilistic calibration over time.
@@ -111,6 +123,14 @@ poetry run python examples/quantiles_and_intervals.py
 poetry run python examples/tail_risk.py
 poetry run python examples/permutation_importance.py
 poetry run python examples/what_if.py
+poetry run python examples/tabular_preprocessing.py
+poetry run python examples/multi_target.py
+poetry run python examples/distribution_comparison.py
+poetry run python examples/local_grids.py
+poetry run python scripts/local_grid_benchmark.py
+condensite fit --train data/train.csv --target target --output-model artifacts/model
+condensite predict --model artifacts/model --data data/inference.csv --target target --output preds.csv
+condensite report --model artifacts/model --data data/val.csv --target target --output-json reports/metrics.json
 poetry run python scripts/aux_sampling_benchmark.py > benchmark.json
 poetry run python scripts/calibration_report.py
 poetry run python benchmarks/run_all.py
@@ -135,3 +155,9 @@ poetry run mypy src
 ## Licensing
 
 This project is licensed under the [MIT License](LICENSE).
+- **Multi-target outputs**: `MultiTargetCondensite` wraps one or more estimators to model each target dimension independently or autoregressively; `examples/multi_target.py` demonstrates training and sampling with correlated targets.
+- **Distribution comparison**: `condensite_torch.distribution_metrics` exposes Wasserstein-1, Kolmogorov–Smirnov, and Jensen–Shannon distances to compare two predicted distributions on the same grid; run `examples/distribution_comparison.py` to see them in action.
+- **Local grids**: `condensite_torch.make_local_grid` builds per-row grids using estimated quantiles so inference focuses on the relevant range; see `examples/local_grids.py`. Defaults (`q_low=0.01`, `q_high=0.99`, `padding=0.1`) work well as a starting point—tighten the quantiles for faster inference on well-behaved targets or loosen them plus more padding for heavy tails.
+- **CLI**: `condensite` exposes `fit`, `predict`, and `report` subcommands so you can train/evaluate from CSV/Parquet without writing Python; see the quickstart commands below.
+- **Model export**: `condensite_torch.export_torchscript` and `export_onnx` (optional dependency) trace any `nn.Module` with a sample tensor and save it for deployment; explicit preprocessing/feature concatenation must be handled by the caller.
+- **Monitoring**: `condensite_torch.monitoring` exposes PSI/KS and PIT drift helpers; `scripts/monitor_report.py` outputs JSON aligned with observability dashboards.
