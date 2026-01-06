@@ -18,7 +18,26 @@ def make_y_grid(
     mode: GridMode = "quantile",
     clip: tuple[float, float] | None = None,
 ) -> NDArray[np.float64]:
-    """Build a strictly increasing y-grid based on training targets."""
+    """Build a strictly increasing y-grid based on training targets.
+
+    Args:
+        y_train (NDArray[np.floating]): Training targets.
+        grid_size (int): Number of grid points to allocate.
+        mode (GridMode): Strategy for grid construction (`"quantile"` or `"linear"`).
+        clip (tuple[float, float] | None): Optional `(low, high)` clipping bounds.
+
+    Returns:
+        NDArray[np.float64]: Strictly increasing grid covering the target support.
+
+    Raises:
+        ValueError: If inputs are empty, grid_size too small, or clip bounds invalid.
+
+    Side Effects:
+        None.
+
+    Complexity:
+        O(n log n) when computing quantiles (dominant branch).
+    """
     data = np.asarray(y_train, dtype=np.float64).reshape(-1)
     if data.size == 0:
         msg = "y_train must contain at least one element."

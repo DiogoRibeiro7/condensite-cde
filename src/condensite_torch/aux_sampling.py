@@ -13,6 +13,23 @@ _IMPORTANCE_EPS = 1e-6
 
 
 def _ensure_shape(shape: tuple[int, int]) -> tuple[int, int]:
+    """Validate `(batch, m_aux)` shapes supplied to samplers.
+
+    Args:
+        shape (tuple[int, int]): Requested dimensions.
+
+    Returns:
+        tuple[int, int]: Same shape after validation.
+
+    Raises:
+        ValueError: If length is not 2 or entries are non-positive.
+
+    Side Effects:
+        None.
+
+    Complexity:
+        O(1).
+    """
     if len(shape) != _EXPECTED_SHAPE_LEN:
         msg = f"Expected (batch, m_aux) shape, got {shape}"
         raise ValueError(msg)
@@ -24,6 +41,23 @@ def _ensure_shape(shape: tuple[int, int]) -> tuple[int, int]:
 
 
 def _make_generator(seed: int | None) -> torch.Generator | None:
+    """Create a CPU generator when a deterministic seed is provided.
+
+    Args:
+        seed (int | None): Seed to use; if `None`, return `None`.
+
+    Returns:
+        torch.Generator | None: CPU generator seeded with `seed`.
+
+    Raises:
+        None.
+
+    Side Effects:
+        None.
+
+    Complexity:
+        O(1).
+    """
     if seed is None:
         return None
     gen = torch.Generator(device="cpu")
@@ -32,6 +66,25 @@ def _make_generator(seed: int | None) -> torch.Generator | None:
 
 
 def _uniform_base_sample(method: str, shape: tuple[int, int], seed: int | None) -> Tensor:
+    """Draw base samples in [0,1] according to the requested method.
+
+    Args:
+        method (str): Sampling strategy (`iid`, `stratified`, `lhs`, `sobol`, `fixed_grid`).
+        shape (tuple[int, int]): `(batch, m_aux)` shape for the samples.
+        seed (int | None): Optional deterministic seed.
+
+    Returns:
+        Tensor: Samples shaped `[batch, m_aux]` in `[0,1]`.
+
+    Raises:
+        ValueError: If method name is unknown.
+
+    Side Effects:
+        Updates cached fixed grids for the deterministic mode.
+
+    Complexity:
+        O(batch * m_aux).
+    """
     batch, m_aux = _ensure_shape(shape)
     generator = _make_generator(seed)
     method_lower = method.lower()
@@ -74,6 +127,21 @@ class ImportanceSampler:
     """Piecewise-uniform importance sampler built from empirical targets."""
 
     def __init__(self, bin_edges: np.ndarray, bin_probs: np.ndarray) -> None:
+        """Instantiate the sampler with explicit histogram bins.
+
+        Args:
+            bin_edges (np.ndarray): Monotone edges with length `n_bins + 1`.
+            bin_probs (np.ndarray): Probabilities per bin.
+
+        Returns:
+            None.
+
+        Raises:
+            ValueError: If dimensions mismatch or lengths are invalid.
+
+        Side Effects:
+            Materializes `torch.Tensor` copies for runtime sampling.
+        """
         if bin_edges.ndim != 1:
             msg = "bin_edges must be 1-D."
             raise ValueError(msg)
@@ -106,6 +174,25 @@ class ImportanceSampler:
         bins: int = 64,
         tail_bonus: float = 0.05,
     ) -> ImportanceSampler:
+        """Build a sampler by histogramming empirical values.
+
+        Args:
+            values (np.ndarray): Raw values normalized to `[0,1]`.
+            bins (int): Number of histogram bins.
+            tail_bonus (float): Extra pseudo-count mass for edge bins.
+
+        Returns:
+            ImportanceSampler: Sampler ready for `.draw`.
+
+        Raises:
+            ValueError: If `values` is empty.
+
+        Side Effects:
+            None beyond `__init__`.
+
+        Complexity:
+            O(n + bins).
+        """
         arr = np.asarray(values, dtype=np.float64).reshape(-1)
         if arr.size == 0:
             raise ValueError("values must contain at least one entry")
@@ -126,6 +213,25 @@ class ImportanceSampler:
         seed: int | None = None,
         device: torch.device | str | None = None,
     ) -> tuple[Tensor, Tensor]:
+        """Draw importance-sampled coordinates plus weights.
+
+        Args:
+            shape (tuple[int, int]): `(batch, m_aux)` size.
+            seed (int | None): Optional deterministic seed.
+            device (torch.device | str | None): Device for the returned tensors.
+
+        Returns:
+            tuple[Tensor, Tensor]: `(samples, weights)` both shaped `[batch, m_aux]`.
+
+        Raises:
+            ValueError: If `shape` is invalid.
+
+        Side Effects:
+            None.
+
+        Complexity:
+            O(batch * m_aux).
+        """
         _ensure_shape(shape)
         generator = _make_generator(seed)
         base = torch.rand(shape, generator=generator, dtype=torch.float32)
@@ -147,6 +253,7 @@ class ImportanceSampler:
         widths = self._bin_widths.to(base_flat.device)[idx]
         samples = lefts + local * widths
         pdf = self._bin_pdf.to(base_flat.device)[idx]
+        # Weight inversely proportional to proposal pdf to preserve unbiased targets.
         weights = torch.where(pdf > 0, 1.0 / pdf, torch.ones_like(pdf))
         weights = weights / torch.mean(weights)
         samples = samples.reshape(shape)
@@ -164,7 +271,27 @@ def sample_yprime(
     device: torch.device | str | None = None,
     value_range: tuple[float, float] = (0.0, 1.0),
 ) -> Tensor:
-    """Sample auxiliary y' points deterministically when a seed is provided."""
+    """Sample auxiliary y' points deterministically when a seed is provided.
+
+    Args:
+        method (str): Sampling strategy identifier.
+        shape (tuple[int, int]): `(batch, m_aux)` shape.
+        seed (int | None): RNG seed for determinism.
+        device (torch.device | str | None): Desired output device.
+        value_range (tuple[float, float]): Inclusive range to scale samples into.
+
+    Returns:
+        Tensor: Samples shaped `[batch, m_aux]`.
+
+    Raises:
+        ValueError: If `value_range` is invalid or method is unknown.
+
+    Side Effects:
+        None.
+
+    Complexity:
+        O(batch * m_aux).
+    """
     low, high = value_range
     if high <= low:
         msg = "value_range must satisfy high > low"

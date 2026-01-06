@@ -9,7 +9,12 @@ except OSError as exc:  # pragma: no cover
     pytest.skip(f"Torch unavailable: {exc}", allow_module_level=True)
 
 from condensite_cde.grids import make_y_grid
-from condensite_torch import CondensiteTorchCDE, CondensiteTorchCDEConfig, make_local_grid
+from condensite_torch import (
+    CondensiteTorchCDE,
+    CondensiteTorchCDEConfig,
+    local_grids,
+    make_local_grid,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -53,3 +58,26 @@ def test_local_grids_cover_targets_better_than_global() -> None:
     pdf_flag = estimator.predict_density(X_test[:5], None, use_local_grid=True)
     assert pdf_flag.shape[0] == 5
     assert pdf_local.shape == (5, 64)
+
+
+def test_local_grid_cache_reused(monkeypatch, trained_estimator) -> None:
+    estimator, X, _y, _grid = trained_estimator
+    call_count = 0
+    original = local_grids.make_local_grid
+
+    def wrapped(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(local_grids, "make_local_grid", wrapped)
+    estimator.predict_density(X[:8], None, use_local_grid=True)
+    estimator.predict_density(X[:8], None, use_local_grid=True)
+    assert call_count == 1
+    estimator.predict_density(
+        X[:8],
+        None,
+        use_local_grid=True,
+        local_grid_params={"padding": 0.2},
+    )
+    assert call_count == 2

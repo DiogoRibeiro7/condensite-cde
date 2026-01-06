@@ -21,7 +21,7 @@ class AutoregressiveCondensite:
         self._dimension: int = 0
         self._fitted = False
 
-    def fit(self, X: NDArray[np.floating], Y: NDArray[np.floating]) -> "AutoregressiveCondensite":
+    def fit(self, X: NDArray[np.floating], Y: NDArray[np.floating]) -> AutoregressiveCondensite:
         X_arr = np.asarray(X, dtype=np.float64)
         Y_arr = np.asarray(Y, dtype=np.float64)
         if X_arr.ndim != 2:

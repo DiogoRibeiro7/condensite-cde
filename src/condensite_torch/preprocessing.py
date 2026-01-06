@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence, Literal
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any, Literal
 
 import numpy as np
 from numpy.typing import NDArray
 
-
 CATEGORICAL_ENCODING = Literal["onehot"]
 UNKNOWN_HANDLING = Literal["error", "use_unknown"]
+ObjectArray = NDArray[np.object_]
+FloatArray = NDArray[np.float64]
 
 
 @dataclass(slots=True)
@@ -37,7 +39,7 @@ class TabularPreprocessor:
         self.feature_names_: list[str] = []
         self._fitted = False
 
-    def fit(self, X: np.ndarray) -> TabularPreprocessor:
+    def fit(self, X: ObjectArray) -> TabularPreprocessor:
         arr = self._ensure_2d(X)
         n_features = arr.shape[1]
         self.numeric_indices = sorted(
@@ -58,16 +60,16 @@ class TabularPreprocessor:
         self._fitted = True
         return self
 
-    def fit_transform(self, X: np.ndarray) -> NDArray[np.float64]:
+    def fit_transform(self, X: ObjectArray) -> FloatArray:
         self.fit(X)
         return self.transform(X)
 
-    def transform(self, X: np.ndarray) -> NDArray[np.float64]:
+    def transform(self, X: ObjectArray) -> FloatArray:
         if not self._fitted:
             msg = "Call fit() before transform()."
             raise RuntimeError(msg)
         arr = self._ensure_2d(X)
-        parts: list[NDArray[np.float64]] = []
+        parts: list[FloatArray] = []
         if self.numeric_indices:
             numeric_block = self._transform_numeric(arr)
             parts.append(numeric_block)
@@ -127,7 +129,7 @@ class TabularPreprocessor:
         return preprocessor
 
     # ------------------------------------------------------------------ Internal helpers
-    def _fit_numeric(self, arr: np.ndarray) -> None:
+    def _fit_numeric(self, arr: ObjectArray) -> None:
         self.numeric_impute_.clear()
         for idx in self.numeric_indices:
             column = self._to_float_column(arr[:, idx])
@@ -136,7 +138,7 @@ class TabularPreprocessor:
                 median = 0.0
             self.numeric_impute_[idx] = float(median)
 
-    def _fit_categorical(self, arr: np.ndarray) -> None:
+    def _fit_categorical(self, arr: ObjectArray) -> None:
         self.categorical_modes_.clear()
         self.categorical_categories_.clear()
         for idx in self.categorical_indices:
@@ -159,8 +161,8 @@ class TabularPreprocessor:
             self.categorical_modes_[idx] = mode
             self.categorical_categories_[idx] = categories
 
-    def _transform_numeric(self, arr: np.ndarray) -> NDArray[np.float64]:
-        columns: list[NDArray[np.float64]] = []
+    def _transform_numeric(self, arr: ObjectArray) -> FloatArray:
+        columns: list[FloatArray] = []
         for idx in self.numeric_indices:
             col = self._to_float_column(arr[:, idx])
             mask = np.isnan(col)
@@ -170,8 +172,8 @@ class TabularPreprocessor:
                 columns.append(mask.astype(np.float64).reshape(-1, 1))
         return np.hstack(columns) if columns else np.empty((arr.shape[0], 0), dtype=np.float64)
 
-    def _transform_categorical(self, arr: np.ndarray) -> NDArray[np.float64]:
-        rows: list[NDArray[np.float64]] = []
+    def _transform_categorical(self, arr: ObjectArray) -> FloatArray:
+        rows: list[FloatArray] = []
         for idx in self.categorical_indices:
             column = np.asarray(arr[:, idx], dtype=object)
             normalized = self._normalize_categories(column)
@@ -212,7 +214,7 @@ class TabularPreprocessor:
         return names
 
     @staticmethod
-    def _ensure_2d(X: np.ndarray) -> np.ndarray:
+    def _ensure_2d(X: ObjectArray | Sequence[Sequence[Any]]) -> ObjectArray:
         arr = np.asarray(X, dtype=object)
         if arr.ndim != 2:
             msg = f"Input must be 2-D, got shape {arr.shape}"
@@ -220,7 +222,7 @@ class TabularPreprocessor:
         return arr
 
     @staticmethod
-    def _normalize_categories(values: NDArray[np.object_]) -> NDArray[np.str_]:
+    def _normalize_categories(values: ObjectArray) -> NDArray[np.str_]:
         normalized = np.empty(values.shape[0], dtype=object)
         for idx, value in enumerate(values):
             if value is None:
@@ -236,7 +238,7 @@ class TabularPreprocessor:
         return normalized.astype(str)
 
     @staticmethod
-    def _to_float_column(values: NDArray[Any]) -> NDArray[np.float64]:
+    def _to_float_column(values: NDArray[Any]) -> FloatArray:
         try:
             column = np.asarray(values, dtype=np.float64)
         except (TypeError, ValueError) as exc:

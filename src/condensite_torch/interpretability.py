@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence, Literal
+from typing import Any, Literal
 
 import numpy as np
 from numpy.typing import NDArray
@@ -36,7 +37,7 @@ def permutation_importance(  # noqa: PLR0913
     head: int | str | None = None,
 ) -> PermutationImportanceResult:
     """Estimate permutation feature importance under the chosen probabilistic metric."""
-    estimator._ensure_fitted()  # noqa: SLF001
+    estimator._ensure_fitted()
     X_arr = np.asarray(X, dtype=np.float64)
     y_arr = np.asarray(y, dtype=np.float64).reshape(-1)
     if X_arr.ndim != 2:
@@ -111,7 +112,7 @@ def what_if(  # noqa: PLR0913
     head: int | str | None = None,
 ) -> WhatIfResult:
     """Compare baseline vs counterfactual predictions after mutating selected features."""
-    estimator._ensure_fitted()  # noqa: SLF001
+    estimator._ensure_fitted()
     base_row = np.asarray(X_row, dtype=np.float64).reshape(1, -1)
     if base_row.ndim != 2 or base_row.shape[0] != 1:
         msg = "X_row must represent a single sample (1-D vector)."
@@ -218,8 +219,8 @@ def _resolve_grid(
     y_grid: NDArray[np.floating] | None,
 ) -> NDArray[np.float64]:
     if y_grid is not None:
-        return estimator._validate_y_grid(y_grid)  # noqa: SLF001
-    return estimator._default_y_grid()  # noqa: SLF001
+        return estimator._validate_y_grid(y_grid)
+    return estimator._default_y_grid()
 
 
 def _validate_probs(probs: Sequence[float]) -> NDArray[np.float64]:

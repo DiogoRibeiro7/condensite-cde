@@ -93,4 +93,4 @@ def _kl_divergence(
     return float(np.mean(result))
 
 
-__all__ = ("wasserstein_1", "ks_distance", "js_divergence")
+__all__ = ("js_divergence", "ks_distance", "wasserstein_1")

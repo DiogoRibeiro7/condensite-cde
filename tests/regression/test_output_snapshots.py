@@ -11,8 +11,8 @@ try:
 except OSError as exc:  # pragma: no cover - depends on environment
     pytest.skip(f"Torch unavailable: {exc}", allow_module_level=True)
 
-from condensite_cde import make_y_grid
 from condensite_torch import CondensiteTorchCDE, CondensiteTorchCDEConfig
+from condensite_torch.diagnostics import coverage_rate, pit_values
 from condensite_torch.metrics import crps_from_cdf, nll_from_pdf
 
 pytestmark = pytest.mark.regression
@@ -32,9 +32,10 @@ def test_density_snapshot_matches_baseline() -> None:
     data = json.loads(metrics_path.read_text(encoding="utf-8"))
     if not data.get("generated"):
         pytest.skip("Regression baselines not generated; run scripts/generate_regression_baselines.py")
-    bundle = np.load(base / "baseline_pdf.npz")
-    pdf_expected = bundle["pdf_expected"].astype(np.float64)
-    grid = bundle["y_grid"].astype(np.float64)
+    quantile_probs = np.asarray(data["quantile_probs"], dtype=np.float64)
+    tail_thresholds = np.asarray(data["tail_prob_thresholds"], dtype=np.float64)
+    pit_edges = np.asarray(data["pit_bin_edges"], dtype=np.float64)
+    snapshots = data["snapshots"]
 
     X_train, y_train, X_test, y_test = _make_dataset()
     config = CondensiteTorchCDEConfig(
@@ -47,12 +48,67 @@ def test_density_snapshot_matches_baseline() -> None:
         normalization_lambda=0.1,
     )
     estimator = CondensiteTorchCDE(config=config, random_seed=11).fit(X_train, y_train)
-    pdf = estimator.predict_density(X_test, grid)
-    np.testing.assert_allclose(pdf, pdf_expected, rtol=1e-2, atol=1e-3)
-    cdf = estimator.predict_cdf(X_test, grid)
-    nll = nll_from_pdf(y_test, grid, pdf)
-    crps = crps_from_cdf(y_test, grid, cdf)
-    integral = np.mean(np.trapezoid(pdf, x=grid, axis=1))
-    assert abs(nll - data["nll_expected"]) <= 5e-3
-    assert abs(crps - data["crps_expected"]) <= 5e-3
-    assert abs(integral - data["integral_mean_expected"]) <= 5e-3
+    dtype_map = {"float32": np.float32, "float64": np.float64}
+
+    for dtype_name, np_dtype in dtype_map.items():
+        bundle = np.load(base / f"baseline_{dtype_name}.npz")
+        pdf_expected = bundle["pdf"].astype(np.float64)
+        cdf_expected = bundle["cdf"].astype(np.float64)
+        grid = bundle["y_grid"].astype(np.float64)
+        quantiles_expected = bundle["quantiles"].astype(np.float64)
+        tail_right_expected = bundle["tail_right"].astype(np.float64)
+        tail_left_expected = bundle["tail_left"].astype(np.float64)
+
+        X_cast = X_test.astype(np_dtype)
+        grid_cast = grid.astype(np_dtype)
+        pdf = estimator.predict_density(X_cast, grid_cast)
+        np.testing.assert_allclose(pdf, pdf_expected, rtol=3e-3, atol=5e-4)
+        cdf = estimator.predict_cdf(X_cast, grid_cast)
+        np.testing.assert_allclose(cdf, cdf_expected, rtol=3e-3, atol=5e-4)
+
+        quantiles = estimator.predict_quantile(X_cast, quantile_probs, y_grid=grid_cast)
+        np.testing.assert_allclose(quantiles, quantiles_expected, rtol=3e-3, atol=5e-4)
+
+        tail_right = np.hstack(
+            [
+                estimator.predict_tail_prob(X_cast, float(th), side="right", y_grid=grid_cast).reshape(-1, 1)
+                for th in tail_thresholds
+            ],
+        )
+        tail_left = np.hstack(
+            [
+                estimator.predict_tail_prob(X_cast, float(th), side="left", y_grid=grid_cast).reshape(-1, 1)
+                for th in tail_thresholds
+            ],
+        )
+        np.testing.assert_allclose(tail_right, tail_right_expected, rtol=3e-3, atol=5e-4)
+        np.testing.assert_allclose(tail_left, tail_left_expected, rtol=3e-3, atol=5e-4)
+
+        metrics_expected = snapshots[dtype_name]
+        grid_float = grid.astype(np.float64, copy=False)
+        nll = float(nll_from_pdf(y_test, grid_float, pdf))
+        crps = float(crps_from_cdf(y_test, grid_float, cdf))
+        integral = float(np.mean(np.trapezoid(pdf, x=grid_float, axis=1)))
+        assert abs(nll - metrics_expected["nll"]) <= 2e-3
+        assert abs(crps - metrics_expected["crps"]) <= 2e-3
+        assert abs(integral - metrics_expected["integral_mean"]) <= 2e-3
+
+        counts, edges = np.histogram(pit_values(y_test, grid_float, cdf), bins=pit_edges)
+        np.testing.assert_array_equal(edges, pit_edges)
+        np.testing.assert_array_equal(counts.tolist(), metrics_expected["pit_hist_counts"])
+
+        prob_index = {float(prob): idx for idx, prob in enumerate(quantile_probs)}
+        interval_bounds = {
+            "50": (0.25, 0.75),
+            "80": (0.1, 0.9),
+            "90": (0.05, 0.95),
+            "95": (0.025, 0.975),
+        }
+        for name, bounds in interval_bounds.items():
+            expected_value = metrics_expected["coverage"][name]
+            observed = coverage_rate(
+                y_test,
+                quantiles[:, prob_index[bounds[0]]],
+                quantiles[:, prob_index[bounds[1]]],
+            )
+            assert abs(observed - expected_value) <= 2e-3

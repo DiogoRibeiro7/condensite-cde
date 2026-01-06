@@ -157,8 +157,8 @@ class ConformalCDEWrapper:
 
     def _resolve_y_grid(self, provided: NDArray[np.floating] | None) -> NDArray[np.float64]:
         if provided is not None:
-            return self.estimator._validate_y_grid(provided)  # noqa: SLF001
-        return self.estimator._default_y_grid()  # noqa: SLF001
+            return self.estimator._validate_y_grid(provided)
+        return self.estimator._default_y_grid()
 
     def _ensure_fitted(self) -> None:
         if not self._fitted:

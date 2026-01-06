@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import torch.nn as nn
+from torch import nn
 
 from condensite_torch import export_torchscript
 

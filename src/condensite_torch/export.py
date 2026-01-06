@@ -10,7 +10,7 @@ import torch
 from torch import nn
 
 try:  # pragma: no cover - optional dependency
-    import onnx  # noqa: F401
+    import onnx
 except ModuleNotFoundError:  # pragma: no cover
     onnx = None  # type: ignore[assignment]
 
@@ -71,4 +71,4 @@ def _to_tensor(example_input: Any) -> torch.Tensor:
     return torch.from_numpy(array)
 
 
-__all__ = ("export_torchscript", "export_onnx")
+__all__ = ("export_onnx", "export_torchscript")

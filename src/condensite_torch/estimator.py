@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import math
 import os
-from collections.abc import Iterator, Sequence
+import platform
+import random
+import subprocess
+import time
+from collections import OrderedDict
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -16,18 +22,20 @@ import numpy as np
 import torch
 from numpy.typing import NDArray
 from torch import Tensor, nn
-from torch.nn import functional as F
 from torch.cuda.amp import GradScaler
+from torch.nn import functional as F
 from torch.utils.data import DataLoader, Dataset, TensorDataset
 
 from condensite_cde.grids import make_y_grid
 
 from .aux_sampling import ImportanceSampler, sample_yprime
-from .kernels import kernel_h_torch
+from .kernels import KernelSpec, get_kernel_spec
+from .losses import LossSpec, get_loss_spec
 from .metrics import crps_from_cdf, nll_from_pdf
 from .models import ActivationFactory, MLPRegressor, MLPRegressorConfig
 from .preprocessing import TabularPreprocessor, TabularPreprocessorConfig
 from .scalers import MinMaxScaler1D, StandardScaler
+from .validation import SchemaConstraints, validate_inputs
 
 
 @dataclass
@@ -52,9 +60,18 @@ class CondensiteTorchCDEConfig:
     patience: int = 10
     sampler: str = "sobol"
     amp: bool = False
+    kernel: Literal["gaussian", "epanechnikov"] = "gaussian"
+    loss: Literal["mse", "mae"] = "mse"
     val_fraction: float = 0.1
     device: str | torch.device = "cpu"
     monitor_metric: Literal["val_crps", "val_nll"] = "val_crps"
+    epistemic_mode: Literal["none", "mc_dropout", "ensemble"] = "none"
+    mc_samples: int = 10
+    ensemble_size: int = 1
+    reproducible: bool = False
+    inference_batch_size: int | None = None
+    inference_grid_chunk_size: int | None = None
+    input_schema: SchemaConstraints | None = None
     preprocessor: TabularPreprocessorConfig | None = field(
         default_factory=TabularPreprocessorConfig,
     )
@@ -76,6 +93,7 @@ _ACTIVATION_REGISTRY: dict[str, type[nn.Module]] = {
     "elu": nn.ELU,
     "leakyrelu": nn.LeakyReLU,
 }
+_LOCAL_GRID_CACHE_SIZE = 4
 
 
 class CondensiteTorchCDE:
@@ -93,6 +111,8 @@ class CondensiteTorchCDE:
         self._device = torch.device(self.config.device)
         self._bandwidths: list[float] = []
         self._set_bandwidths()
+        self._kernel_spec: KernelSpec = get_kernel_spec(self.config.kernel)
+        self._loss_spec: LossSpec = get_loss_spec(self.config.loss)
         self.bandwidth_net: MLPRegressor | None = None
         self.x_scaler: StandardScaler | None = None
         self.y_scaler: MinMaxScaler1D | None = None
@@ -105,6 +125,18 @@ class CondensiteTorchCDE:
         self._best_epoch: int = -1
         self._restored_best_epoch: int | None = None
         self._current_epoch: int = -1
+        self._model_card: dict[str, Any] | None = None
+        self._data_schema: dict[str, Any] | None = None
+        self._version_info: dict[str, Any] | None = None
+        self._schema_constraints: SchemaConstraints | None = (
+            copy.deepcopy(self.config.input_schema)
+            if self.config.input_schema is not None
+            else None
+        )
+        self._local_grid_cache: OrderedDict[
+            tuple[str, int, float, float, float, str | None, str | None],
+            NDArray[np.float64],
+        ] = OrderedDict()
 
     # ------------------------------------------------------------------ Training
     def fit(  # noqa: PLR0912, PLR0914, PLR0915
@@ -115,21 +147,45 @@ class CondensiteTorchCDE:
         X_val: NDArray[np.floating] | None = None,
         y_val: NDArray[np.floating] | None = None,
     ) -> CondensiteTorchCDE:
+        """Train the estimator with streamed auxiliary samples.
+
+        Args:
+            X (NDArray[np.floating]): Training features shaped `(n_samples, n_features)`.
+            y (NDArray[np.floating]): Training targets shaped `(n_samples,)`.
+            X_val (NDArray[np.floating] | None): Optional validation features to skip internal split.
+            y_val (NDArray[np.floating] | None): Optional validation targets matching `X_val`.
+
+        Returns:
+            CondensiteTorchCDE: The fitted estimator (`self`).
+
+        Raises:
+            ValueError: If input shapes mismatch or validation arrays have inconsistent lengths.
+            RuntimeError: If preprocessing fails due to incompatible inputs.
+
+        Side Effects:
+            Mutates internal state (model weights, scalers, metadata) and may write AMP warnings.
+
+        Complexity:
+            O(epochs * n_samples * m_aux) forward/backward passes, dominated by kernel targets.
+        """
         X_arr = np.asarray(X, dtype=object)
         y_arr: NDArray[np.float64] = np.asarray(y, dtype=np.float64).reshape(-1)
-        expected_dim = 2
-        if X_arr.ndim != expected_dim:
-            msg = f"Expected 2D array for X, received {X_arr.shape}"
-            raise ValueError(msg)
-        if X_arr.shape[0] != y_arr.shape[0]:
-            msg = "X and y must contain the same number of samples."
-            raise ValueError(msg)
+        schema = self._schema_for_validation(include_targets=True)
+        validate_inputs(X_arr, y_arr, schema=schema, context="fit")
 
+        self._local_grid_cache.clear()
         self._set_bandwidths()
         self._y_train = y_arr.copy()
+        self._data_schema = self._summarize_data_schema(X_arr, y_arr)
+        self._version_info = self._environment_versions()
+        start_time = time.perf_counter()
 
-        torch.manual_seed(self.random_seed)
-        np.random.seed(self.random_seed)
+        if self.config.reproducible:
+            self._seed_everything()
+        else:
+            torch.manual_seed(self.random_seed)
+            np.random.seed(self.random_seed)
+            random.seed(self.random_seed)
 
         if self.config.preprocessor is not None:
             self.preprocessor = TabularPreprocessor(self.config.preprocessor)
@@ -137,6 +193,11 @@ class CondensiteTorchCDE:
             self.preprocessor = None
         X_features = self._fit_preprocessor(X_arr)
         self.y_scaler = MinMaxScaler1D().fit(y_arr)
+        derived_schema = self._schema_from_training(X_arr, y_arr)
+        self._schema_constraints = self._merge_schema_constraints(
+            self._schema_constraints,
+            derived_schema,
+        )
 
         X_scaled: NDArray[np.float32] = X_features.astype(np.float32)
         y_scaled: NDArray[np.float32] = self.y_scaler.transform(y_arr)
@@ -249,6 +310,14 @@ class CondensiteTorchCDE:
             eval_grid = None
         self._determine_best_head(val_eval_data, eval_grid)
         self._fitted = True
+        training_time = time.perf_counter() - start_time
+        best_metric_value = None if not math.isfinite(best_metric) else float(best_metric)
+        self._model_card = self._build_model_card(
+            schema=self._data_schema,
+            training_time_seconds=training_time,
+            best_metric=best_metric_value,
+            monitor_metric=monitor_metric,
+        )
         return self
 
     def _train_val_split(
@@ -339,8 +408,8 @@ class CondensiteTorchCDE:
             target_chunk = self._compute_kernel_targets(targets_batch, y_chunk, adaptive)
             predictions = self.model(features)
             weights_flat = weights_chunk.reshape(-1, 1)
-            squared_error = (predictions - target_chunk) ** 2
-            weighted = squared_error * weights_flat
+            per_entry = self._loss_spec.elementwise_fn(predictions, target_chunk)
+            weighted = per_entry * weights_flat
             total_weighted_error = total_weighted_error + weighted.sum()
             total_entries += weights_flat.numel()
             if norm_acc is not None:
@@ -393,13 +462,16 @@ class CondensiteTorchCDE:
         local_grid_params: dict[str, float | int] | None = None,
     ) -> NDArray[np.float64]:
         self._ensure_fitted()
+        X_arr = np.asarray(X, dtype=object)
+        schema = self._schema_for_validation(include_targets=False)
+        validate_inputs(X_arr, None, schema=schema, context="predict_density")
         grid = y_grid
         if grid is None and use_local_grid:
-            grid = self._build_local_grids(X, local_grid_params)
+            grid = self._build_local_grids(X_arr, local_grid_params)
         if grid is None:
             grid = self._default_y_grid()
-        return self._predict_density_internal(
-            X,
+        return self._predict_density_with_epistemic(
+            X_arr,
             grid,
             head=head,
         )
@@ -416,35 +488,48 @@ class CondensiteTorchCDE:
         assert self.model is not None
         X_arr = np.asarray(X, dtype=object)
         grid_arr, local = self._process_y_grid(X_arr, y_grid)
-        X_scaled = self._transform_with_preprocessor(X_arr)
+        X_scaled = self._transform_with_preprocessor(X_arr).astype(np.float32, copy=False)
         x_tensor = torch.from_numpy(X_scaled).to(self._device)
         if local:
             return self._predict_density_local(x_tensor, grid_arr, head=head)
-        y_scaled = self.y_scaler.transform(grid_arr)
+        y_scaled = self.y_scaler.transform(grid_arr).astype(np.float32, copy=False)
         y_tensor_scaled = torch.from_numpy(y_scaled).to(self._device)
-        y_tensor = torch.from_numpy(grid_arr.astype(np.float32)).to(self._device)
-        grid_size = y_tensor_scaled.shape[0]
+        y_tensor = torch.from_numpy(grid_arr.astype(np.float32, copy=False)).to(self._device)
 
+        row_batch = self._inference_row_batch_size(x_tensor.shape[0])
+        outputs: list[Tensor] = []
         self.model.eval()
         with torch.no_grad():
-            x_expanded = x_tensor.unsqueeze(1).expand(-1, grid_size, -1)
-            y_expanded = y_tensor_scaled.unsqueeze(0).expand(x_tensor.shape[0], -1).unsqueeze(-1)
-            features = torch.cat([x_expanded, y_expanded], dim=-1).reshape(
-                -1,
-                x_tensor.shape[1] + 1,
-            )
-            preds = self.model(features).reshape(
-                x_tensor.shape[0],
-                grid_size,
-                len(self._bandwidths),
-            )
-        scale = max(float(self.y_scaler.data_range_), 1e-8)
-        pdf_scaled = torch.clamp(preds / scale, min=1e-12)
-        normalized = self._normalize_pdf_heads(pdf_scaled, y_tensor)
+            for start in range(0, x_tensor.shape[0], row_batch):
+                end = min(start + row_batch, x_tensor.shape[0])
+                batch = x_tensor[start:end]
+                outputs.append(
+                    self._predict_density_row_batch(
+                        batch,
+                        y_tensor_scaled,
+                        y_tensor,
+                    ),
+                )
+        normalized = torch.cat(outputs, dim=0) if outputs else torch.zeros(
+            (0, y_tensor.shape[0], len(self._bandwidths)),
+            device=self._device,
+        )
         density_heads = normalized.cpu().numpy().astype(np.float64, copy=False)
         combined = self._combine_heads(density_heads, head=head)
         result: NDArray[np.float64] = combined.astype(np.float64, copy=False)
         return result
+
+    def _predict_density_with_epistemic(
+        self,
+        X: NDArray[np.floating],
+        y_grid: NDArray[np.floating],
+        *,
+        head: int | str | None = None,
+    ) -> NDArray[np.float64]:
+        mode = self.config.epistemic_mode
+        if mode == "mc_dropout":
+            return self._predict_density_mc_dropout(X, y_grid, head=head)
+        return self._predict_density_internal(X, y_grid, head=head)
 
     def _predict_density_local(
         self,
@@ -492,16 +577,20 @@ class CondensiteTorchCDE:
         use_local_grid: bool = False,
         local_grid_params: dict[str, float | int] | None = None,
     ) -> NDArray[np.float64]:
-        pdf = self.predict_density(
-            X,
-            y_grid,
-            head=head,
-            use_local_grid=use_local_grid,
-            local_grid_params=local_grid_params,
-        )
+        self._ensure_fitted()
+        X_arr = np.asarray(X, dtype=object)
+        schema = self._schema_for_validation(include_targets=False)
+        validate_inputs(X_arr, None, schema=schema, context="predict_cdf")
         grid = y_grid
+        if grid is None and use_local_grid:
+            grid = self._build_local_grids(X_arr, local_grid_params)
         if grid is None:
             grid = self._default_y_grid()
+        pdf = self.predict_density(
+            X_arr,
+            grid,
+            head=head,
+        )
         if isinstance(grid, np.ndarray) and grid.ndim == 2:
             cdfs = np.empty_like(pdf)
             for idx in range(pdf.shape[0]):
@@ -671,13 +760,33 @@ class CondensiteTorchCDE:
         use_local_grid: bool = False,
         local_grid_params: dict[str, float | int] | None = None,
     ) -> dict[str, float]:
-        """Compute NLL/CRPS/integral error metrics for (X, y)."""
+        """Compute NLL/CRPS/integral error metrics for (X, y).
+
+        Args:
+            X (NDArray[np.floating]): Features to evaluate.
+            y (NDArray[np.floating]): Observed targets aligned with `X`.
+            y_grid (NDArray[np.floating] | None): Optional custom grid; defaults to training grid.
+            head (int | str | None): Which bandwidth head to use.
+            use_local_grid (bool): Whether to build per-row grids for evaluation.
+            local_grid_params (dict[str, float | int] | None): Extra kwargs forwarded to local grid builder.
+
+        Returns:
+            dict[str, float]: Dictionary with `nll`, `crps`, and `integral_error`.
+
+        Raises:
+            ValueError: If shapes mismatch.
+
+        Side Effects:
+            None.
+
+        Complexity:
+            O(n_samples * grid_size).
+        """
         self._ensure_fitted()
         X_arr = np.asarray(X, dtype=object)
         y_arr: NDArray[np.float64] = np.asarray(y, dtype=np.float64).reshape(-1)
-        if X_arr.shape[0] != y_arr.shape[0]:
-            msg = "X and y must contain the same number of samples."
-            raise ValueError(msg)
+        schema = self._schema_for_validation(include_targets=True)
+        validate_inputs(X_arr, y_arr, schema=schema, context="evaluate")
         grid = y_grid
         if grid is None and use_local_grid:
             grid = self._build_local_grids(X_arr, local_grid_params)
@@ -708,9 +817,45 @@ class CondensiteTorchCDE:
             "integral_error": integral_error,
         }
 
+    def model_card(self) -> dict[str, Any]:
+        """Return the recorded reproducibility metadata.
+
+        Returns:
+            dict[str, Any]: Deep copy of the model card with config hash, schema, and training summary.
+
+        Raises:
+            RuntimeError: If `fit` has not been called and no metadata exists yet.
+
+        Side Effects:
+            None.
+
+        Complexity:
+            O(size(card)) due to the defensive deep copy.
+        """
+        if self._model_card is None:
+            msg = "Call fit() before requesting the model card."
+            raise RuntimeError(msg)
+        return copy.deepcopy(self._model_card)
+
     # ------------------------------------------------------------------ Persistence
     def save(self, path: os.PathLike[str] | str) -> None:
-        """Persist model weights, configuration, and scalers to disk."""
+        """Persist model weights, configuration, scalers, and metadata to disk.
+
+        Args:
+            path (os.PathLike | str): Target directory for artifacts.
+
+        Returns:
+            None.
+
+        Raises:
+            RuntimeError: If `fit` has not been called.
+
+        Side Effects:
+            Writes multiple files (model weights, JSON metadata) under `path`.
+
+        Complexity:
+            O(params) for serializing weights and scalers.
+        """
         self._ensure_fitted()
         assert self.model is not None
         target = Path(path)
@@ -731,6 +876,10 @@ class CondensiteTorchCDE:
                 None if self._restored_best_epoch is None else int(self._restored_best_epoch)
             ),
         }
+        if self._model_card is not None:
+            metadata["model_card"] = self._model_card
+        if self._schema_constraints is not None:
+            metadata["schema_constraints"] = self._schema_constraints_to_dict(self._schema_constraints)
         if self.bandwidth_net is not None:
             torch.save(self.bandwidth_net.state_dict(), target / _BANDWIDTH_MODEL_FILENAME)
             metadata["has_bandwidth_net"] = True
@@ -746,7 +895,24 @@ class CondensiteTorchCDE:
         *,
         map_location: str | torch.device | None = None,
     ) -> CondensiteTorchCDE:
-        """Load a saved estimator from disk."""
+        """Load a saved estimator from disk.
+
+        Args:
+            path (os.PathLike | str): Directory produced by `save`.
+            map_location (str | torch.device | None): Optional override for torch device.
+
+        Returns:
+            CondensiteTorchCDE: Restored estimator ready for inference.
+
+        Raises:
+            FileNotFoundError: If expected files are missing.
+
+        Side Effects:
+            Reads files from disk and instantiates torch modules.
+
+        Complexity:
+            O(params) for loading weights/scalers.
+        """
         base = Path(path)
         config_dict = cls._read_json(base / _CONFIG_FILENAME)
         scalers_dict = cls._read_json(base / _SCALERS_FILENAME)
@@ -759,6 +925,15 @@ class CondensiteTorchCDE:
         if map_location is not None:
             estimator._device = torch.device(map_location)
             estimator.config.device = estimator._device
+        schema_payload = metadata.get("schema_constraints")
+        if schema_payload is not None:
+            estimator._schema_constraints = cls._schema_constraints_from_dict(schema_payload)
+        elif estimator.config.input_schema is not None:
+            estimator._schema_constraints = copy.deepcopy(estimator.config.input_schema)
+        estimator._model_card = metadata.get("model_card")
+        if estimator._model_card is not None:
+            estimator._data_schema = estimator._model_card.get("data_schema")
+            estimator._version_info = estimator._model_card.get("versions")
         estimator._set_bandwidths(metadata.get("bandwidths"))
         if preprocessor_data is not None:
             estimator.preprocessor = TabularPreprocessor.from_dict(preprocessor_data)
@@ -976,6 +1151,18 @@ class CondensiteTorchCDE:
             return m_aux
         return min(m_aux, int(chunk))
 
+    def _inference_row_batch_size(self, total_rows: int) -> int:
+        size = self.config.inference_batch_size
+        if size is None or size <= 0:
+            return total_rows
+        return max(1, min(total_rows, int(size)))
+
+    def _inference_grid_chunk_size(self, total_points: int) -> int:
+        size = self.config.inference_grid_chunk_size
+        if size is None or size <= 0:
+            return total_points
+        return max(1, min(total_points, int(size)))
+
     def _iter_aux_chunks(
         self,
         y_prime: Tensor,
@@ -1011,10 +1198,52 @@ class CondensiteTorchCDE:
                 head_scale = adaptive[:, idx].unsqueeze(1)
                 effective_bw = head_scale * bandwidth
             kernels_per_bandwidth.append(
-                kernel_h_torch(y_targets, y_prime_chunk, effective_bw),
+                self._kernel_spec.torch_fn(y_targets, y_prime_chunk, effective_bw),
             )
         kernels = torch.stack(kernels_per_bandwidth, dim=-1)
         return kernels.reshape(-1, len(self._bandwidths))
+
+    def _predict_density_row_batch(
+        self,
+        x_batch: Tensor,
+        y_tensor_scaled: Tensor,
+        y_tensor: Tensor,
+    ) -> Tensor:
+        chunk_size = self._inference_grid_chunk_size(y_tensor.shape[0])
+        raw_chunks: list[Tensor] = []
+        for start in range(0, y_tensor.shape[0], chunk_size):
+            end = min(start + chunk_size, y_tensor.shape[0])
+            raw_chunks.append(
+                self._predict_pdf_chunk(
+                    x_batch,
+                    y_tensor_scaled[start:end],
+                    y_tensor[start:end],
+                ),
+            )
+        raw = torch.cat(raw_chunks, dim=1) if raw_chunks else torch.zeros(
+            (x_batch.shape[0], 0, len(self._bandwidths)),
+            device=self._device,
+        )
+        return self._normalize_pdf_heads(raw, y_tensor)
+
+    def _predict_pdf_chunk(
+        self,
+        x_batch: Tensor,
+        y_scaled_chunk: Tensor,
+        y_chunk: Tensor,
+    ) -> Tensor:
+        if y_scaled_chunk.ndim != 1:
+            msg = "y_scaled_chunk must be flattened."
+            raise ValueError(msg)
+        chunk_size = y_scaled_chunk.shape[0]
+        if chunk_size == 0:
+            return torch.zeros((x_batch.shape[0], 0, len(self._bandwidths)), device=self._device)
+        x_expanded = x_batch.unsqueeze(1).expand(-1, chunk_size, -1)
+        y_expanded = y_scaled_chunk.unsqueeze(0).expand(x_batch.shape[0], -1).unsqueeze(-1)
+        features = torch.cat([x_expanded, y_expanded], dim=-1).reshape(-1, x_batch.shape[1] + 1)
+        preds = self.model(features).reshape(x_batch.shape[0], chunk_size, len(self._bandwidths))
+        scale = max(float(self.y_scaler.data_range_), 1e-8)
+        return torch.clamp(preds / scale, min=1e-12)
 
     def _determine_best_head(
         self,
@@ -1117,6 +1346,23 @@ class CondensiteTorchCDE:
         return moment, mass
 
     def _summarize_y_reference(self) -> list[float] | None:
+        """Capture representative target values for persistence metadata.
+
+        Args:
+            None.
+
+        Returns:
+            list[float] | None: Quantile summary or `None` if no targets are stored.
+
+        Raises:
+            None.
+
+        Side Effects:
+            None.
+
+        Complexity:
+            O(n log n) due to quantile computation.
+        """
         if self._y_train is None or self._y_train.size == 0:
             return None
         arr = np.asarray(self._y_train, dtype=np.float64).reshape(-1)
@@ -1125,6 +1371,334 @@ class CondensiteTorchCDE:
         quantiles = np.linspace(0.0, 1.0, _Y_REFERENCE_POINTS)
         summary = np.quantile(arr, quantiles, method="linear")
         return summary.tolist()
+
+    # ------------------------------------------------------------------ Reproducibility helpers
+    def _seed_everything(self) -> None:
+        """Seed Python/NumPy/Torch RNGs and enforce deterministic kernels.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+
+        Raises:
+            None.
+
+        Side Effects:
+            Sets global RNG seeds and toggles PyTorch deterministic flags.
+
+        Complexity:
+            O(1) configuration work.
+        """
+        torch.manual_seed(self.random_seed)
+        torch.cuda.manual_seed_all(self.random_seed)
+        np.random.seed(self.random_seed)
+        random.seed(self.random_seed)
+        # Deterministic algorithms can be slower but make regression tests trustworthy.
+        torch.use_deterministic_algorithms(True, warn_only=True)
+        if torch.backends.cudnn.is_available():
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+
+    def _environment_versions(self) -> dict[str, Any]:
+        """Collect runtime versions for the model card.
+
+        Args:
+            None.
+
+        Returns:
+            dict[str, Any]: Mapping of package names to version strings.
+
+        Raises:
+            None.
+
+        Side Effects:
+            Executes a cheap git command (if available) to capture the commit hash.
+
+        Complexity:
+            O(1) introspection.
+        """
+        info: dict[str, Any] = {
+            "python": platform.python_version(),
+            "torch": torch.__version__,
+            "numpy": np.__version__,
+        }
+        cuda_version = torch.version.cuda
+        if cuda_version is not None:
+            info["cuda"] = cuda_version
+        git_commit = self._git_commit()
+        if git_commit:
+            info["git_commit"] = git_commit
+        return info
+
+    @staticmethod
+    def _git_commit() -> str | None:
+        """Return the current git commit hash if available.
+
+        Args:
+            None.
+
+        Returns:
+            str | None: Commit hash when running inside a git checkout.
+
+        Raises:
+            None.
+
+        Side Effects:
+            Invokes `git rev-parse HEAD`.
+
+        Complexity:
+            O(1) shell invocation.
+        """
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except OSError:
+            return None
+        if result.returncode != 0:
+            return None
+        commit = result.stdout.strip()
+        return commit or None
+
+    def _summarize_data_schema(
+        self,
+        X: NDArray[np.floating],
+        y: NDArray[np.floating],
+    ) -> dict[str, Any]:
+        """Capture lightweight schema stats for the model card.
+
+        Args:
+            X (NDArray[np.floating]): Training features used during fit.
+            y (NDArray[np.floating]): Target array used during fit.
+
+        Returns:
+            dict[str, Any]: Summary with counts, dtypes, and target range.
+
+        Raises:
+            None.
+
+        Side Effects:
+            None.
+
+        Complexity:
+            O(n) to compute min/max.
+        """
+        return {
+            "n_samples": int(X.shape[0]),
+            "n_features": int(X.shape[1]) if X.ndim == 2 else 0,
+            "x_dtype": str(X.dtype),
+            "y_dtype": str(y.dtype),
+            "y_min": float(np.min(y)) if y.size else 0.0,
+            "y_max": float(np.max(y)) if y.size else 0.0,
+        }
+
+    def _schema_from_training(
+        self,
+        X: NDArray[np.floating],
+        y: NDArray[np.floating],
+    ) -> SchemaConstraints | None:
+        """Build schema constraints using fitted preprocessors and target range."""
+        if X.ndim != 2:
+            return None
+        numeric_indices = (
+            list(self.preprocessor.numeric_indices)
+            if getattr(self, "preprocessor", None) is not None
+            and self.preprocessor.numeric_indices
+            else None
+        )
+        categorical_indices = (
+            list(self.preprocessor.categorical_indices)
+            if getattr(self, "preprocessor", None) is not None
+            and self.preprocessor.categorical_indices
+            else None
+        )
+        max_card = None
+        if getattr(self, "preprocessor", None) is not None and self.preprocessor.categorical_indices:
+            counts = [
+                len(self.preprocessor.categorical_categories_.get(idx, []))
+                for idx in self.preprocessor.categorical_indices
+            ]
+            if counts:
+                max_card = max(counts)
+        y_min = float(np.min(y)) if y.size else None
+        y_max = float(np.max(y)) if y.size else None
+        return SchemaConstraints(
+            numeric_indices=numeric_indices,
+            categorical_indices=categorical_indices,
+            max_categorical_cardinality=max_card,
+            allow_missing_numeric=True,
+            allow_missing_categorical=True,
+            y_min=y_min,
+            y_max=y_max,
+        )
+
+    def _config_hash(self) -> str:
+        """Compute a stable hash of the serialized config.
+
+        Args:
+            None.
+
+        Returns:
+            str: Hex digest identifying the config payload.
+
+        Raises:
+            None.
+
+        Side Effects:
+            None.
+
+        Complexity:
+            O(len(config_json)).
+        """
+        payload = json.dumps(self._config_to_dict(self.config), sort_keys=True).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+    def _schema_for_validation(self, *, include_targets: bool) -> SchemaConstraints | None:
+        """Return a defensive copy of the schema constraints for validation."""
+        schema = self._schema_constraints
+        if schema is None:
+            return None
+        return SchemaConstraints(
+            numeric_indices=list(schema.numeric_indices) if schema.numeric_indices is not None else None,
+            categorical_indices=list(schema.categorical_indices)
+            if schema.categorical_indices is not None
+            else None,
+            max_categorical_cardinality=schema.max_categorical_cardinality,
+            allow_missing_numeric=schema.allow_missing_numeric,
+            allow_missing_categorical=schema.allow_missing_categorical,
+            y_min=schema.y_min if include_targets else None,
+            y_max=schema.y_max if include_targets else None,
+        )
+
+    @staticmethod
+    def _merge_schema_constraints(
+        base: SchemaConstraints | None,
+        derived: SchemaConstraints | None,
+    ) -> SchemaConstraints | None:
+        """Combine base/user schema with derived schema information."""
+        if base is None and derived is None:
+            return None
+        if base is None:
+            return copy.deepcopy(derived)
+        if derived is None:
+            return copy.deepcopy(base)
+
+        def _pick_seq(primary: Sequence[int] | None, secondary: Sequence[int] | None) -> list[int] | None:
+            if primary:
+                return list(primary)
+            if secondary:
+                return list(secondary)
+            return None
+
+        def _pick_card(primary: int | None, secondary: int | None) -> int | None:
+            candidates = [val for val in (primary, secondary) if val is not None]
+            return min(candidates) if candidates else None
+
+        return SchemaConstraints(
+            numeric_indices=_pick_seq(base.numeric_indices, derived.numeric_indices),
+            categorical_indices=_pick_seq(base.categorical_indices, derived.categorical_indices),
+            max_categorical_cardinality=_pick_card(
+                base.max_categorical_cardinality,
+                derived.max_categorical_cardinality,
+            ),
+            allow_missing_numeric=base.allow_missing_numeric and derived.allow_missing_numeric,
+            allow_missing_categorical=base.allow_missing_categorical
+            and derived.allow_missing_categorical,
+            y_min=base.y_min if base.y_min is not None else derived.y_min,
+            y_max=base.y_max if base.y_max is not None else derived.y_max,
+        )
+
+    @staticmethod
+    def _schema_constraints_to_dict(schema: SchemaConstraints) -> dict[str, Any]:
+        """Serialize schema constraints to JSON-safe payload."""
+        return {
+            "numeric_indices": (
+                list(schema.numeric_indices) if schema.numeric_indices is not None else None
+            ),
+            "categorical_indices": (
+                list(schema.categorical_indices) if schema.categorical_indices is not None else None
+            ),
+            "max_categorical_cardinality": schema.max_categorical_cardinality,
+            "allow_missing_numeric": schema.allow_missing_numeric,
+            "allow_missing_categorical": schema.allow_missing_categorical,
+            "y_min": schema.y_min,
+            "y_max": schema.y_max,
+        }
+
+    @staticmethod
+    def _schema_constraints_from_dict(data: Mapping[str, Any]) -> SchemaConstraints:
+        """Deserialize schema constraints from JSON payload."""
+        return SchemaConstraints(
+            numeric_indices=data.get("numeric_indices"),
+            categorical_indices=data.get("categorical_indices"),
+            max_categorical_cardinality=data.get("max_categorical_cardinality"),
+            allow_missing_numeric=bool(data.get("allow_missing_numeric", True)),
+            allow_missing_categorical=bool(data.get("allow_missing_categorical", True)),
+            y_min=data.get("y_min"),
+            y_max=data.get("y_max"),
+        )
+
+    def _build_model_card(
+        self,
+        *,
+        schema: dict[str, Any] | None,
+        training_time_seconds: float,
+        best_metric: float | None,
+        monitor_metric: str,
+    ) -> dict[str, Any]:
+        """Finalize the model card payload after training completes.
+
+        Args:
+            schema (dict[str, Any] | None): Data schema summary collected at fit time.
+            training_time_seconds (float): Wall-clock time spent training.
+            best_metric (float | None): Best monitor metric observed.
+            monitor_metric (str): Name of the monitored validation metric.
+
+        Returns:
+            dict[str, Any]: JSON-serializable metadata describing the run.
+
+        Raises:
+            None.
+
+        Side Effects:
+            None.
+
+        Complexity:
+            O(1).
+        """
+        schema_payload = dict(schema or {})
+        if self._schema_constraints is not None:
+            schema_payload["constraints"] = self._schema_constraints_to_dict(self._schema_constraints)
+        versions = self._version_info or self._environment_versions()
+        early_stopping_triggered = self._restored_best_epoch is not None
+        return {
+            "config": self._config_to_dict(self.config),
+            "config_hash": self._config_hash(),
+            "random_seed": self.random_seed,
+            "reproducible": bool(self.config.reproducible),
+            "versions": versions,
+            "data_schema": schema_payload,
+            "training": {
+                "time_seconds": float(training_time_seconds),
+                "monitor_metric": monitor_metric,
+                "best_metric": best_metric,
+                "epochs_requested": int(self.config.epochs),
+                "epochs_ran": int(self._current_epoch + 1),
+                "best_epoch": int(self._best_epoch),
+                "restored_epoch": (
+                    None if self._restored_best_epoch is None else int(self._restored_best_epoch)
+                ),
+                "early_stopping_triggered": early_stopping_triggered,
+                "sampler_calls": int(self._sampler_call),
+                "m_aux": int(self.config.m_aux),
+                "sampler": self.config.sampler,
+            },
+        }
 
     def _scalers_to_dict(self) -> dict[str, Any]:
         assert self.x_scaler is not None
@@ -1193,11 +1767,24 @@ class CondensiteTorchCDE:
         q_low = float(config.get("q_low", 0.01))
         q_high = float(config.get("q_high", 0.99))
         padding = float(config.get("padding", 0.1))
+        head = config.get("head")
         reference = config.get("reference_grid")
         y_grid_np = None
         if reference is not None:
             y_grid_np = np.asarray(reference, dtype=np.float64)
-        return make_local_grid(
+        cache_key = self._local_grid_cache_key(
+            X,
+            grid_size=grid_size,
+            q_low=q_low,
+            q_high=q_high,
+            padding=padding,
+            head=head,
+            reference_grid=y_grid_np,
+        )
+        cached = self._local_grid_cache.get(cache_key)
+        if cached is not None:
+            return cached.copy()
+        grids = make_local_grid(
             self,
             X,
             grid_size=grid_size,
@@ -1205,7 +1792,50 @@ class CondensiteTorchCDE:
             q_high=q_high,
             padding=padding,
             y_grid=y_grid_np,
+            head=head,
         )
+        self._store_local_grid_cache(cache_key, grids)
+        return grids
+
+    def _local_grid_cache_key(
+        self,
+        X: NDArray[np.object_],
+        *,
+        grid_size: int,
+        q_low: float,
+        q_high: float,
+        padding: float,
+        head: int | str | None,
+        reference_grid: NDArray[np.float64] | None,
+    ) -> tuple[str, int, float, float, float, str | None, str | None]:
+        features = self._transform_with_preprocessor(X).astype(np.float32, copy=False)
+        features_bytes = np.ascontiguousarray(features).tobytes()
+        feature_digest = hashlib.sha1(features_bytes).hexdigest()
+        reference_digest = None
+        if reference_grid is not None:
+            reference_arr = np.asarray(reference_grid, dtype=np.float64)
+            reference_bytes = np.ascontiguousarray(reference_arr).tobytes()
+            reference_digest = hashlib.sha1(reference_bytes).hexdigest()
+        head_key = None if head is None else str(head)
+        return (
+            feature_digest,
+            int(grid_size),
+            float(q_low),
+            float(q_high),
+            float(padding),
+            head_key,
+            reference_digest,
+        )
+
+    def _store_local_grid_cache(
+        self,
+        key: tuple[str, int, float, float, float, str | None, str | None],
+        grids: NDArray[np.float64],
+    ) -> None:
+        self._local_grid_cache[key] = grids.astype(np.float64, copy=True)
+        self._local_grid_cache.move_to_end(key)
+        while len(self._local_grid_cache) > _LOCAL_GRID_CACHE_SIZE:
+            self._local_grid_cache.popitem(last=False)
 
     def _config_to_dict(self, config: CondensiteTorchCDEConfig) -> dict[str, Any]:
         data = asdict(config)

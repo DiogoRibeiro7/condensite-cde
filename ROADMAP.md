@@ -1,5 +1,17 @@
 # Roadmap
 
+## Next Priorities
+
+To keep the backlog manageable, we are focusing on the following scoped issues before expanding the feature surface:
+
+1. **Decision-quality APIs (M1: Correctness)** – Expose `predict_quantile`, `predict_interval`, tail probabilities, and expected shortfall helpers so downstream apps can request actionable summaries. Tests must enforce monotonicity and tail trends.
+2. **Conformal intervals (M1: Correctness)** – Implement a split-conformal wrapper with CLI/example coverage so users can obtain finite-sample guarantees on top of the learned CDF.
+3. **Save/load & persistence polish (M3: Reliability & UX)** – Finish the artifact contract (model weights, preprocessors, config metadata) and add regression tests that prove round-trips keep density outputs stable.
+4. **Early stopping + validation metrics (M1/M3 overlap)** – Harden the training loop with explicit CRPS/NLL monitoring, patience, and “restore best checkpoint” behaviour. Include an example notebook/script that visualises the recorded metrics.
+5. **Sampling defaults + auxiliary improvements (M2: Scalability)** – Promote Sobol/stratified sampling to first-class configuration, add importance sampling, and document how each option affects variance vs. compute on benchmarks.
+
+Each item should have a dedicated GitHub issue linked to the milestone noted above so work stays incremental instead of merging through one mega-change.
+
 ## Milestones and Issues
 
 ### M1: Correctness

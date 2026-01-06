@@ -3,19 +3,22 @@
 from __future__ import annotations
 
 import csv
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Literal, Sequence
+from typing import Any, Literal
 
 import numpy as np
 from numpy.typing import NDArray
 
 try:  # pragma: no cover - optional dependency
-    import pandas as pd
+    import pandas as pd  # type: ignore[import]
 except ModuleNotFoundError:  # pragma: no cover
     pd = None  # type: ignore[assignment]
 
 
 Format = Literal["csv", "parquet"]
+ObjectArray = NDArray[np.object_]
+FloatArray = NDArray[np.float64]
 
 
 def load_tabular(
@@ -23,7 +26,7 @@ def load_tabular(
     *,
     target_column: str | None,
     file_format: str = "auto",
-) -> tuple[NDArray[object], NDArray[np.float64] | None, list[str]]:
+) -> tuple[ObjectArray, FloatArray | None, list[str]]:
     """Load tabular data into numpy arrays; returns (X, y, feature_names)."""
     resolved = _resolve_format(path, file_format)
     if resolved == "csv":
@@ -62,10 +65,10 @@ def _resolve_format(path: str | Path, file_format: str) -> str:
     return "csv"
 
 
-def _load_csv(path: str | Path, target_column: str | None) -> tuple[NDArray[object], NDArray[np.float64] | None, list[str]]:
+def _load_csv(path: str | Path, target_column: str | None) -> tuple[ObjectArray, FloatArray | None, list[str]]:
     if pd is not None:
         df = pd.read_csv(path)
-        y = None
+        y: FloatArray | None = None
         if target_column is not None:
             if target_column not in df.columns:
                 msg = f"Target column '{target_column}' not found."
@@ -73,9 +76,9 @@ def _load_csv(path: str | Path, target_column: str | None) -> tuple[NDArray[obje
             y_series = df.pop(target_column)
             y = y_series.to_numpy(dtype=np.float64, copy=True)
         feature_names = list(df.columns)
-        X = df.astype(object).to_numpy(copy=True)
+        X = df.astype(object).to_numpy(copy=True, dtype=object)
         return X, y, feature_names
-    with open(path, "r", encoding="utf-8") as handle:
+    with open(path, encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
         rows = list(reader)
     if not rows:
@@ -99,12 +102,12 @@ def _load_csv(path: str | Path, target_column: str | None) -> tuple[NDArray[obje
     return X_arr, y_arr, remaining_names
 
 
-def _load_parquet(path: str | Path, target_column: str | None):
+def _load_parquet(path: str | Path, target_column: str | None) -> tuple[ObjectArray, FloatArray | None, list[str]]:
     if pd is None:
         msg = "Reading Parquet requires pandas; install pandas to enable this format."
         raise RuntimeError(msg)
     df = pd.read_parquet(path)
-    y = None
+    y: FloatArray | None = None
     if target_column is not None:
         if target_column not in df.columns:
             msg = f"Target column '{target_column}' not found."
@@ -112,7 +115,7 @@ def _load_parquet(path: str | Path, target_column: str | None):
         y_series = df.pop(target_column)
         y = y_series.to_numpy(dtype=np.float64, copy=True)
     feature_names = list(df.columns)
-    X = df.astype(object).to_numpy(copy=True)
+    X = df.astype(object).to_numpy(copy=True, dtype=object)
     return X, y, feature_names
 
 

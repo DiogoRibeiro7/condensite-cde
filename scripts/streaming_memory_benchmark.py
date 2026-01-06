@@ -28,11 +28,11 @@ def _track_feature_rows(stats: dict[str, int]) -> None:
         stats["max_rows"] = max(stats["max_rows"], features.shape[0])
         return features
 
-    setattr(CondensiteTorchCDE, "_combine_features", spy)
+    CondensiteTorchCDE._combine_features = spy
     try:
         yield
     finally:
-        setattr(CondensiteTorchCDE, "_combine_features", original)
+        CondensiteTorchCDE._combine_features = original
 
 
 def _run_with_config(config: CondensiteTorchCDEConfig, X: np.ndarray, y: np.ndarray) -> dict[str, int]:

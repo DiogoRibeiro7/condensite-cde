@@ -34,7 +34,7 @@ def main() -> None:
     )
     estimator = CondensiteTorchCDE(config=config, random_seed=5).fit(X, y)
     test_X = X[:5]
-    global_grid = estimator._default_y_grid()  # noqa: SLF001 demo only
+    global_grid = estimator._default_y_grid()
     local_grids = make_local_grid(estimator, test_X, grid_size=64)
     pdf_global = estimator.predict_density(test_X, global_grid)
     pdf_local = estimator.predict_density(test_X, local_grids)

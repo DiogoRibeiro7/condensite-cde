@@ -91,7 +91,7 @@ class MultiTargetCondensite:
         cdfs = np.empty_like(density)
         for dim, estimator in enumerate(self._models):
             per_dim_density = density[:, dim, :]
-            cdf = estimator._cdf_from_pdf(per_dim_density, grid)  # noqa: SLF001
+            cdf = estimator._cdf_from_pdf(per_dim_density, grid)
             cdfs[:, dim, :] = cdf
         return cdfs
 
