@@ -83,9 +83,10 @@ class ConformalCDEWrapper:
                 y_grid=grid,
                 head=head,
             )
+            probs = np.array([tail, 1.0 - tail], dtype=np.float64)
             quantiles = self.estimator.predict_quantile(
                 X,
-                [tail, 1.0 - tail],
+                probs,
                 y_grid=grid,
                 head=head,
             )
@@ -117,9 +118,10 @@ class ConformalCDEWrapper:
     ) -> float:
         assert self._X_cal is not None
         assert self._y_cal is not None
+        probs = np.array([tail, 1.0 - tail], dtype=np.float64)
         quantiles = self.estimator.predict_quantile(
             self._X_cal,
-            [tail, 1.0 - tail],
+            probs,
             y_grid=y_grid,
             head=head,
         )
@@ -130,7 +132,7 @@ class ConformalCDEWrapper:
         scores = np.maximum.reduce([np.zeros_like(residual_low), residual_low, residual_high])
         sorted_scores = np.sort(scores)
         n = sorted_scores.size
-        rank = min(n - 1, max(0, int(math.ceil((n + 1) * coverage)) - 1))
+        rank = min(n - 1, max(0, math.ceil((n + 1) * coverage) - 1))
         return float(sorted_scores[rank])
 
     def _cdf_tail_probability(
@@ -151,7 +153,7 @@ class ConformalCDEWrapper:
         scores = np.minimum(pit, 1.0 - pit)
         sorted_scores = np.sort(scores)
         n = sorted_scores.size
-        rank = min(n - 1, max(0, int(math.ceil((n + 1) * alpha)) - 1))
+        rank = min(n - 1, max(0, math.ceil((n + 1) * alpha) - 1))
         tail = float(sorted_scores[rank])
         return float(np.clip(tail, 1e-6, 0.5))
 

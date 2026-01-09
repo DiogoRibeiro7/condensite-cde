@@ -315,8 +315,10 @@ def test_right_tail_probability_decreases_with_threshold(trained_estimator) -> N
     assert tail_low.shape == tail_mid.shape == tail_high.shape == (4,)
     assert np.all(tail_high <= tail_mid)
     assert np.all(tail_mid <= tail_low)
-    assert np.all(tail_low >= 0.9)
-    assert np.all(tail_high <= 0.1)
+    high_prob_floor = 0.9
+    high_prob_ceil = 0.1
+    assert np.all(tail_low >= high_prob_floor)
+    assert np.all(tail_high <= high_prob_ceil)
 
 
 def test_expected_shortfall_exceeds_quantile(trained_estimator) -> None:

@@ -13,7 +13,7 @@ try:
     import torch  # noqa: F401
 except OSError as exc:  # pragma: no cover
     print(json.dumps({"error": f"Torch unavailable: {exc}"}))
-    raise SystemExit(0)
+    raise SystemExit(0) from exc
 
 from benchmarks.datasets import load_dataset
 
@@ -36,7 +36,12 @@ def _fit_estimator(X_train: np.ndarray, y_train: np.ndarray) -> CondensiteTorchC
     return CondensiteTorchCDE(config=config, random_seed=11).fit(X_train, y_train)
 
 
-def _time_eval(estimator: CondensiteTorchCDE, X: np.ndarray, y: np.ndarray, **kwargs) -> tuple[dict[str, float], float]:
+def _time_eval(
+    estimator: CondensiteTorchCDE,
+    X: np.ndarray,
+    y: np.ndarray,
+    **kwargs: float | int | dict[str, float | int],
+) -> tuple[dict[str, float], float]:
     start = time.perf_counter()
     metrics = estimator.evaluate(X, y, **kwargs)
     duration = time.perf_counter() - start
@@ -70,7 +75,12 @@ def benchmark_dataset(
             "padding": padding,
         },
     }
-    metrics_local, runtime_local = _time_eval(estimator, bundle.X_test, bundle.y_test, **local_kwargs)
+    metrics_local, runtime_local = _time_eval(
+        estimator,
+        bundle.X_test,
+        bundle.y_test,
+        **local_kwargs,
+    )
 
     # Coverage diagnostic to quantify how often y_test sits inside grid bounds.
     local_grids = make_local_grid(

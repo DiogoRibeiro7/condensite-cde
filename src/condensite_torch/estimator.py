@@ -9,7 +9,8 @@ import math
 import os
 import platform
 import random
-import subprocess
+import shutil
+import subprocess  # noqa: S404
 import time
 from collections import OrderedDict
 from collections.abc import Iterator, Mapping, Sequence
@@ -26,10 +27,11 @@ from torch.cuda.amp import GradScaler
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, Dataset, TensorDataset
 
-from condensite_cde.grids import make_y_grid
+from condensite_cde.grids import GridMode, make_y_grid
 
 from .aux_sampling import ImportanceSampler, sample_yprime
 from .kernels import KernelSpec, get_kernel_spec
+from . import local_grids
 from .losses import LossSpec, get_loss_spec
 from .metrics import crps_from_cdf, nll_from_pdf
 from .models import ActivationFactory, MLPRegressor, MLPRegressorConfig
@@ -94,6 +96,9 @@ _ACTIVATION_REGISTRY: dict[str, type[nn.Module]] = {
     "leakyrelu": nn.LeakyReLU,
 }
 _LOCAL_GRID_CACHE_SIZE = 4
+_GRID_DIMENSION = 2
+_MIN_GRID_POINTS = 2
+_SMALL_MASS = 1e-8
 
 
 class CondensiteTorchCDE:
@@ -133,6 +138,7 @@ class CondensiteTorchCDE:
             if self.config.input_schema is not None
             else None
         )
+        self.preprocessor: TabularPreprocessor | None = None
         self._local_grid_cache: OrderedDict[
             tuple[str, int, float, float, float, str | None, str | None],
             NDArray[np.float64],
@@ -152,8 +158,10 @@ class CondensiteTorchCDE:
         Args:
             X (NDArray[np.floating]): Training features shaped `(n_samples, n_features)`.
             y (NDArray[np.floating]): Training targets shaped `(n_samples,)`.
-            X_val (NDArray[np.floating] | None): Optional validation features to skip internal split.
-            y_val (NDArray[np.floating] | None): Optional validation targets matching `X_val`.
+            X_val (NDArray[np.floating] | None): Optional validation features to
+                skip internal split.
+            y_val (NDArray[np.floating] | None): Optional validation targets matching
+                `X_val`.
 
         Returns:
             CondensiteTorchCDE: The fitted estimator (`self`).
@@ -383,7 +391,7 @@ class CondensiteTorchCDE:
             batches += 1
         return total_loss / max(batches, 1)
 
-    def _compute_batch_loss(
+    def _compute_batch_loss(  # noqa: PLR0914
         self,
         X_batch: Tensor,
         y_batch: Tensor,
@@ -410,7 +418,7 @@ class CondensiteTorchCDE:
             weights_flat = weights_chunk.reshape(-1, 1)
             per_entry = self._loss_spec.elementwise_fn(predictions, target_chunk)
             weighted = per_entry * weights_flat
-            total_weighted_error = total_weighted_error + weighted.sum()
+            total_weighted_error += weighted.sum()
             total_entries += weights_flat.numel()
             if norm_acc is not None:
                 preds_reshaped = predictions.view(batch_size, -1, len(self._bandwidths))
@@ -486,6 +494,8 @@ class CondensiteTorchCDE:
         assert self.x_scaler is not None
         assert self.y_scaler is not None
         assert self.model is not None
+        y_scaler = self.y_scaler
+        model = self.model
         X_arr = np.asarray(X, dtype=object)
         grid_arr, local = self._process_y_grid(X_arr, y_grid)
         X_scaled = self._transform_with_preprocessor(X_arr).astype(np.float32, copy=False)
@@ -531,7 +541,34 @@ class CondensiteTorchCDE:
             return self._predict_density_mc_dropout(X, y_grid, head=head)
         return self._predict_density_internal(X, y_grid, head=head)
 
-    def _predict_density_local(
+    def _predict_density_mc_dropout(
+        self,
+        X: NDArray[np.floating],
+        y_grid: NDArray[np.floating],
+        *,
+        head: int | str | None = None,
+    ) -> NDArray[np.float64]:
+        """Estimate density by averaging multiple dropout-enabled forward passes."""
+        self._ensure_fitted()
+        assert self.model is not None
+        samples = max(1, int(self.config.mc_samples))
+        X_arr = np.asarray(X, dtype=object)
+        schema = self._schema_for_validation(include_targets=False)
+        validate_inputs(X_arr, None, schema=schema, context="predict_density")
+        y_grid_arr = self._validate_y_grid(y_grid)
+        original_mode = self.model.training
+        self.model.train(True)
+        densities: list[NDArray[np.float64]] = []
+        try:
+            for _ in range(samples):
+                pdf = self._predict_density_internal(X_arr, y_grid_arr, head=head)
+                densities.append(pdf)
+        finally:
+            self.model.train(original_mode)
+        stacked = np.stack(densities, axis=0)
+        return cast(NDArray[np.float64], stacked.mean(axis=0)).astype(np.float64, copy=False)
+
+    def _predict_density_local(  # noqa: PLR0914
         self,
         x_tensor: Tensor,
         y_grids: NDArray[np.float64],
@@ -540,8 +577,10 @@ class CondensiteTorchCDE:
     ) -> NDArray[np.float64]:
         assert self.y_scaler is not None
         assert self.model is not None
+        y_scaler = self.y_scaler
+        model = self.model
         n_rows, grid_size = y_grids.shape
-        y_scaled = self.y_scaler.transform(y_grids.reshape(-1)).reshape(n_rows, grid_size)
+        y_scaled = y_scaler.transform(y_grids.reshape(-1)).reshape(n_rows, grid_size)
         y_scaled_tensor = torch.from_numpy(y_scaled.astype(np.float32)).to(self._device)
         features: list[Tensor] = []
         counts: list[int] = []
@@ -552,17 +591,17 @@ class CondensiteTorchCDE:
             y_row_scaled = y_scaled_tensor[row].unsqueeze(1)
             features.append(torch.cat([x_row, y_row_scaled], dim=1))
         concatenated = torch.cat(features, dim=0)
-        scale = max(float(self.y_scaler.data_range_), 1e-8)
-        self.model.eval()
+        scale = max(float(y_scaler.data_range_), 1e-8)
+        model.eval()
         with torch.no_grad():
-            preds = torch.clamp(self.model(concatenated) / scale, min=1e-12)
+            preds = torch.clamp(model(concatenated) / scale, min=1e-12)
         start = 0
-        row_heads: list[np.ndarray] = []
+        row_heads: list[NDArray[np.float64]] = []
         for row, count in enumerate(counts):
             chunk = preds[start : start + count]
             y_row = torch.from_numpy(y_grids[row].astype(np.float32)).to(self._device)
             normalized = self._normalize_pdf_heads_row(chunk, y_row)
-            row_heads.append(normalized.cpu().numpy())
+            row_heads.append(normalized.cpu().numpy().astype(np.float64, copy=False))
             start += count
         density_heads = np.stack(row_heads, axis=0)
         combined = self._combine_heads(density_heads, head=head)
@@ -591,7 +630,7 @@ class CondensiteTorchCDE:
             grid,
             head=head,
         )
-        if isinstance(grid, np.ndarray) and grid.ndim == 2:
+        if isinstance(grid, np.ndarray) and grid.ndim == _GRID_DIMENSION:
             cdfs = np.empty_like(pdf)
             for idx in range(pdf.shape[0]):
                 cdfs[idx] = self._cdf_from_pdf(pdf[idx : idx + 1], grid[idx])[0]
@@ -698,7 +737,11 @@ class CondensiteTorchCDE:
         )
         pdf = self.predict_density(X, grid_arr, head=head)
         cdf = self._cdf_from_pdf(pdf, grid_arr)
-        quantiles = self._quantiles_from_cdf(cdf, grid_arr, np.array([alpha_value], dtype=np.float64))
+        quantiles = self._quantiles_from_cdf(
+            cdf,
+            grid_arr,
+            np.array([alpha_value], dtype=np.float64),
+        )
         thresholds = quantiles[:, 0]
         es = np.empty(pdf.shape[0], dtype=np.float64)
         for idx in range(pdf.shape[0]):
@@ -708,7 +751,7 @@ class CondensiteTorchCDE:
                 thresholds[idx],
                 greater=side_norm == "right",
             )
-            if mass <= 1e-8:
+            if mass <= _SMALL_MASS:
                 es[idx] = thresholds[idx]
             else:
                 es[idx] = numerator / mass
@@ -750,7 +793,7 @@ class CondensiteTorchCDE:
             )
         return samples
 
-    def evaluate(
+    def evaluate(  # noqa: PLR0913
         self,
         X: NDArray[np.floating],
         y: NDArray[np.floating],
@@ -768,7 +811,8 @@ class CondensiteTorchCDE:
             y_grid (NDArray[np.floating] | None): Optional custom grid; defaults to training grid.
             head (int | str | None): Which bandwidth head to use.
             use_local_grid (bool): Whether to build per-row grids for evaluation.
-            local_grid_params (dict[str, float | int] | None): Extra kwargs forwarded to local grid builder.
+            local_grid_params (dict[str, float | int] | None): Extra kwargs forwarded
+                to local grid builder.
 
         Returns:
             dict[str, float]: Dictionary with `nll`, `crps`, and `integral_error`.
@@ -799,7 +843,7 @@ class CondensiteTorchCDE:
             use_local_grid=use_local_grid,
             local_grid_params=local_grid_params,
         )
-        if isinstance(grid, np.ndarray) and grid.ndim == 2:
+        if isinstance(grid, np.ndarray) and grid.ndim == _GRID_DIMENSION:
             cdf = np.empty_like(pdf)
             for idx in range(pdf.shape[0]):
                 cdf[idx] = self._cdf_from_pdf(pdf[idx : idx + 1], grid[idx])[0]
@@ -821,7 +865,8 @@ class CondensiteTorchCDE:
         """Return the recorded reproducibility metadata.
 
         Returns:
-            dict[str, Any]: Deep copy of the model card with config hash, schema, and training summary.
+            dict[str, Any]: Deep copy of the model card with config hash,
+                schema, and training summary.
 
         Raises:
             RuntimeError: If `fit` has not been called and no metadata exists yet.
@@ -879,7 +924,9 @@ class CondensiteTorchCDE:
         if self._model_card is not None:
             metadata["model_card"] = self._model_card
         if self._schema_constraints is not None:
-            metadata["schema_constraints"] = self._schema_constraints_to_dict(self._schema_constraints)
+            metadata["schema_constraints"] = self._schema_constraints_to_dict(
+                self._schema_constraints,
+            )
         if self.bandwidth_net is not None:
             torch.save(self.bandwidth_net.state_dict(), target / _BANDWIDTH_MODEL_FILENAME)
             metadata["has_bandwidth_net"] = True
@@ -889,7 +936,7 @@ class CondensiteTorchCDE:
         self._write_json(target / _METADATA_FILENAME, metadata)
 
     @classmethod
-    def load(
+    def load(  # noqa: PLR0914
         cls,
         path: os.PathLike[str] | str,
         *,
@@ -917,7 +964,9 @@ class CondensiteTorchCDE:
         config_dict = cls._read_json(base / _CONFIG_FILENAME)
         scalers_dict = cls._read_json(base / _SCALERS_FILENAME)
         preprocessor_path = base / _PREPROCESSOR_FILENAME
-        preprocessor_data = cls._read_json(preprocessor_path) if preprocessor_path.exists() else None
+        preprocessor_data = (
+            cls._read_json(preprocessor_path) if preprocessor_path.exists() else None
+        )
         metadata = cls._read_json(base / _METADATA_FILENAME)
         config = cls._config_from_dict(config_dict)
         random_seed = int(metadata.get("random_seed", 0))
@@ -969,10 +1018,15 @@ class CondensiteTorchCDE:
         estimator._fitted = True
         return estimator
 
-    def _default_y_grid(self, num_points: int = 128, mode: str = "quantile") -> NDArray[np.float64]:
+    def _default_y_grid(
+        self,
+        num_points: int = 128,
+        mode: str = "quantile",
+    ) -> NDArray[np.float64]:
+        mode_literal = cast(GridMode, mode)
         if self._y_train is not None:
             try:
-                return make_y_grid(self._y_train, grid_size=num_points, mode=mode)
+                return make_y_grid(self._y_train, grid_size=num_points, mode=mode_literal)
             except ValueError:
                 pass
         if self.y_scaler is None:
@@ -994,7 +1048,7 @@ class CondensiteTorchCDE:
         increments = pdf * widths[None, :]
         cdf = np.cumsum(increments, axis=1)
         norm = np.clip(cdf[:, -1:], 1e-8, None)
-        cdf = cdf / norm
+        cdf /= norm
         cdf = np.clip(cdf, 0.0, 1.0)
         cdf[:, -1] = 1.0
         return cdf
@@ -1034,7 +1088,8 @@ class CondensiteTorchCDE:
                 refine_steps,
             )
 
-        return y_low + rel * widths
+        result = y_low + rel * widths
+        return cast(NDArray[np.float64], result.astype(np.float64, copy=False))
 
     @staticmethod
     def _refine_relative_positions(  # noqa: PLR0913, PLR0917
@@ -1075,12 +1130,13 @@ class CondensiteTorchCDE:
     ) -> NDArray[np.float64]:
         num_heads = density_heads.shape[-1]
         if num_heads == 1:
-            return density_heads[..., 0]
+            return density_heads[..., 0].astype(np.float64, copy=False)
         resolved = head if head is not None else self.config.bandwidth_strategy
         if isinstance(resolved, str):
             option = resolved.lower()
             if option == "mean":
-                return density_heads.mean(axis=-1)
+                averaged = density_heads.mean(axis=-1).astype(np.float64, copy=False)
+                return cast(NDArray[np.float64], averaged)
             if option == "best":
                 index = int(self._best_head_index)
             elif option == "first":
@@ -1093,7 +1149,7 @@ class CondensiteTorchCDE:
         if index < 0 or index >= num_heads:
             msg = f"Head index {index} is out of range for {num_heads} heads."
             raise ValueError(msg)
-        return density_heads[..., index]
+        return density_heads[..., index].astype(np.float64, copy=False)
 
     def _predict_adaptive_bandwidths(self, X_batch: Tensor) -> Tensor | None:
         if self.bandwidth_net is None:
@@ -1117,28 +1173,28 @@ class CondensiteTorchCDE:
 
     @staticmethod
     def _point_widths_tensor(y_grid: Tensor) -> Tensor:
-        if y_grid.ndim != 1 or y_grid.shape[0] < 2:
+        if y_grid.ndim != 1 or y_grid.shape[0] < _MIN_GRID_POINTS:
             msg = "y_grid must be 1-D with at least two points."
             raise ValueError(msg)
         diffs = torch.diff(y_grid)
         widths = torch.empty_like(y_grid)
         widths[0] = diffs[0] / 2
         widths[-1] = diffs[-1] / 2
-        if y_grid.shape[0] > 2:
+        if y_grid.shape[0] > _MIN_GRID_POINTS:
             widths[1:-1] = (diffs[:-1] + diffs[1:]) / 2
         return torch.clamp(widths, min=1e-8)
 
     @staticmethod
     def _point_widths_numpy(y_grid: NDArray[np.float64]) -> NDArray[np.float64]:
         arr = np.asarray(y_grid, dtype=np.float64).reshape(-1)
-        if arr.ndim != 1 or arr.size < 2:
+        if arr.ndim != 1 or arr.size < _MIN_GRID_POINTS:
             msg = "y_grid must be 1-D with at least two points."
             raise ValueError(msg)
         diffs = np.diff(arr)
         widths = np.empty_like(arr)
         widths[0] = diffs[0] / 2
         widths[-1] = diffs[-1] / 2
-        if arr.size > 2:
+        if arr.size > _MIN_GRID_POINTS:
             widths[1:-1] = (diffs[:-1] + diffs[1:]) / 2
         return np.clip(widths, 1e-12, None)
 
@@ -1163,8 +1219,8 @@ class CondensiteTorchCDE:
             return total_points
         return max(1, min(total_points, int(size)))
 
+    @staticmethod
     def _iter_aux_chunks(
-        self,
         y_prime: Tensor,
         sample_weights: Tensor,
         chunk_size: int,
@@ -1241,8 +1297,13 @@ class CondensiteTorchCDE:
         x_expanded = x_batch.unsqueeze(1).expand(-1, chunk_size, -1)
         y_expanded = y_scaled_chunk.unsqueeze(0).expand(x_batch.shape[0], -1).unsqueeze(-1)
         features = torch.cat([x_expanded, y_expanded], dim=-1).reshape(-1, x_batch.shape[1] + 1)
-        preds = self.model(features).reshape(x_batch.shape[0], chunk_size, len(self._bandwidths))
-        scale = max(float(self.y_scaler.data_range_), 1e-8)
+        model = self.model
+        y_scaler = self.y_scaler
+        if model is None or y_scaler is None:
+            msg = "Model and scaler must be available."
+            raise RuntimeError(msg)
+        preds = model(features).reshape(x_batch.shape[0], chunk_size, len(self._bandwidths))
+        scale = max(float(y_scaler.data_range_), 1e-8)
         return torch.clamp(preds / scale, min=1e-12)
 
     def _determine_best_head(
@@ -1273,7 +1334,9 @@ class CondensiteTorchCDE:
         if self.config.sampler.lower() != "importance":
             self._importance_sampler = None
             return
-        self._importance_sampler = ImportanceSampler.from_array(y_scaled)
+        self._importance_sampler = ImportanceSampler.from_array(
+            y_scaled.astype(np.float64, copy=False),
+        )
 
     @staticmethod
     def _quantiles_from_cdf(
@@ -1370,7 +1433,7 @@ class CondensiteTorchCDE:
             return arr.tolist()
         quantiles = np.linspace(0.0, 1.0, _Y_REFERENCE_POINTS)
         summary = np.quantile(arr, quantiles, method="linear")
-        return summary.tolist()
+        return cast(list[float], summary.tolist())
 
     # ------------------------------------------------------------------ Reproducibility helpers
     def _seed_everything(self) -> None:
@@ -1397,7 +1460,7 @@ class CondensiteTorchCDE:
         random.seed(self.random_seed)
         # Deterministic algorithms can be slower but make regression tests trustworthy.
         torch.use_deterministic_algorithms(True, warn_only=True)
-        if torch.backends.cudnn.is_available():
+        if torch.backends.cudnn.is_available():  # type: ignore[no-untyped-call]
             torch.backends.cudnn.deterministic = True
             torch.backends.cudnn.benchmark = False
 
@@ -1451,9 +1514,12 @@ class CondensiteTorchCDE:
         Complexity:
             O(1) shell invocation.
         """
+        git_exe = shutil.which("git")
+        if git_exe is None:
+            return None
         try:
-            result = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
+            result = subprocess.run(  # noqa: S603
+                [git_exe, "rev-parse", "HEAD"],
                 check=False,
                 capture_output=True,
                 text=True,
@@ -1465,8 +1531,8 @@ class CondensiteTorchCDE:
         commit = result.stdout.strip()
         return commit or None
 
+    @staticmethod
     def _summarize_data_schema(
-        self,
         X: NDArray[np.floating],
         y: NDArray[np.floating],
     ) -> dict[str, Any]:
@@ -1490,7 +1556,7 @@ class CondensiteTorchCDE:
         """
         return {
             "n_samples": int(X.shape[0]),
-            "n_features": int(X.shape[1]) if X.ndim == 2 else 0,
+            "n_features": int(X.shape[1]) if X.ndim == _GRID_DIMENSION else 0,
             "x_dtype": str(X.dtype),
             "y_dtype": str(y.dtype),
             "y_min": float(np.min(y)) if y.size else 0.0,
@@ -1503,25 +1569,20 @@ class CondensiteTorchCDE:
         y: NDArray[np.floating],
     ) -> SchemaConstraints | None:
         """Build schema constraints using fitted preprocessors and target range."""
-        if X.ndim != 2:
+        if X.ndim != _GRID_DIMENSION:
             return None
-        numeric_indices = (
-            list(self.preprocessor.numeric_indices)
-            if getattr(self, "preprocessor", None) is not None
-            and self.preprocessor.numeric_indices
-            else None
-        )
-        categorical_indices = (
-            list(self.preprocessor.categorical_indices)
-            if getattr(self, "preprocessor", None) is not None
-            and self.preprocessor.categorical_indices
-            else None
-        )
+        preprocessor = self.preprocessor
+        numeric_indices: list[int] | None = None
+        categorical_indices: list[int] | None = None
+        if preprocessor is not None and preprocessor.numeric_indices:
+            numeric_indices = list(preprocessor.numeric_indices)
+        if preprocessor is not None and preprocessor.categorical_indices:
+            categorical_indices = list(preprocessor.categorical_indices)
         max_card = None
-        if getattr(self, "preprocessor", None) is not None and self.preprocessor.categorical_indices:
+        if preprocessor is not None and preprocessor.categorical_indices:
             counts = [
-                len(self.preprocessor.categorical_categories_.get(idx, []))
-                for idx in self.preprocessor.categorical_indices
+                len(preprocessor.categorical_categories_.get(idx, []))
+                for idx in preprocessor.categorical_indices
             ]
             if counts:
                 max_card = max(counts)
@@ -1564,10 +1625,12 @@ class CondensiteTorchCDE:
         if schema is None:
             return None
         return SchemaConstraints(
-            numeric_indices=list(schema.numeric_indices) if schema.numeric_indices is not None else None,
-            categorical_indices=list(schema.categorical_indices)
-            if schema.categorical_indices is not None
-            else None,
+            numeric_indices=(
+                list(schema.numeric_indices) if schema.numeric_indices is not None else None
+            ),
+            categorical_indices=(
+                list(schema.categorical_indices) if schema.categorical_indices is not None else None
+            ),
             max_categorical_cardinality=schema.max_categorical_cardinality,
             allow_missing_numeric=schema.allow_missing_numeric,
             allow_missing_categorical=schema.allow_missing_categorical,
@@ -1588,7 +1651,10 @@ class CondensiteTorchCDE:
         if derived is None:
             return copy.deepcopy(base)
 
-        def _pick_seq(primary: Sequence[int] | None, secondary: Sequence[int] | None) -> list[int] | None:
+        def _pick_seq(
+            primary: Sequence[int] | None,
+            secondary: Sequence[int] | None,
+        ) -> list[int] | None:
             if primary:
                 return list(primary)
             if secondary:
@@ -1673,7 +1739,9 @@ class CondensiteTorchCDE:
         """
         schema_payload = dict(schema or {})
         if self._schema_constraints is not None:
-            schema_payload["constraints"] = self._schema_constraints_to_dict(self._schema_constraints)
+            schema_payload["constraints"] = self._schema_constraints_to_dict(
+                self._schema_constraints,
+            )
         versions = self._version_info or self._environment_versions()
         early_stopping_triggered = self._restored_best_epoch is not None
         return {
@@ -1739,35 +1807,40 @@ class CondensiteTorchCDE:
         scaler.fitted_ = True
         return scaler
 
-    def _fit_preprocessor(self, X: np.ndarray) -> NDArray[np.float64]:
+    def _fit_preprocessor(self, X: NDArray[np.object_]) -> NDArray[np.float64]:
         if self.preprocessor is not None:
             features = self.preprocessor.fit_transform(X)
         else:
             features = np.asarray(X, dtype=np.float64)
         self.x_scaler = StandardScaler().fit(features)
-        return self.x_scaler.transform(features)
+        transformed = self.x_scaler.transform(features)
+        return cast(NDArray[np.float64], transformed)
 
-    def _transform_with_preprocessor(self, X: np.ndarray) -> NDArray[np.float32]:
+    def _transform_with_preprocessor(self, X: NDArray[np.object_]) -> NDArray[np.float64]:
         assert self.x_scaler is not None
         if self.preprocessor is not None:
             features = self.preprocessor.transform(X)
         else:
             features = np.asarray(X, dtype=np.float64)
-        return self.x_scaler.transform(features).astype(np.float32)
+        transformed = self.x_scaler.transform(features)
+        return cast(NDArray[np.float64], transformed)
 
     def _build_local_grids(
         self,
         X: NDArray[np.object_],
         params: dict[str, float | int] | None,
     ) -> NDArray[np.float64]:
-        from .local_grids import make_local_grid
-
         config = params or {}
         grid_size = int(config.get("grid_size", 64))
         q_low = float(config.get("q_low", 0.01))
         q_high = float(config.get("q_high", 0.99))
         padding = float(config.get("padding", 0.1))
-        head = config.get("head")
+        head_raw = config.get("head")
+        if head_raw is None or isinstance(head_raw, (int, str)):
+            head = head_raw
+        else:
+            msg = "head parameter must be int, str, or None."
+            raise TypeError(msg)
         reference = config.get("reference_grid")
         y_grid_np = None
         if reference is not None:
@@ -1784,7 +1857,7 @@ class CondensiteTorchCDE:
         cached = self._local_grid_cache.get(cache_key)
         if cached is not None:
             return cached.copy()
-        grids = make_local_grid(
+        grids = local_grids.make_local_grid(
             self,
             X,
             grid_size=grid_size,
@@ -1797,7 +1870,7 @@ class CondensiteTorchCDE:
         self._store_local_grid_cache(cache_key, grids)
         return grids
 
-    def _local_grid_cache_key(
+    def _local_grid_cache_key(  # noqa: PLR0913
         self,
         X: NDArray[np.object_],
         *,
@@ -1810,12 +1883,12 @@ class CondensiteTorchCDE:
     ) -> tuple[str, int, float, float, float, str | None, str | None]:
         features = self._transform_with_preprocessor(X).astype(np.float32, copy=False)
         features_bytes = np.ascontiguousarray(features).tobytes()
-        feature_digest = hashlib.sha1(features_bytes).hexdigest()
+        feature_digest = hashlib.sha256(features_bytes).hexdigest()
         reference_digest = None
         if reference_grid is not None:
             reference_arr = np.asarray(reference_grid, dtype=np.float64)
             reference_bytes = np.ascontiguousarray(reference_arr).tobytes()
-            reference_digest = hashlib.sha1(reference_bytes).hexdigest()
+            reference_digest = hashlib.sha256(reference_bytes).hexdigest()
         head_key = None if head is None else str(head)
         return (
             feature_digest,
@@ -1884,7 +1957,7 @@ class CondensiteTorchCDE:
     @staticmethod
     def _read_json(path: Path) -> dict[str, Any]:
         with path.open("r", encoding="utf-8") as handle:
-            return json.load(handle)
+            return cast(dict[str, Any], json.load(handle))
 
     def _infer_model_input_dim(self) -> int:
         assert self.model is not None
@@ -1914,13 +1987,13 @@ class CondensiteTorchCDE:
 
     def _process_y_grid(
         self,
-        X: NDArray[object],
+        X: NDArray[np.object_],
         y_grid: NDArray[np.floating],
     ) -> tuple[NDArray[np.float64], bool]:
         arr = np.asarray(y_grid, dtype=np.float64)
         if arr.ndim == 1:
             return self._validate_y_grid(arr), False
-        if arr.ndim != 2:
+        if arr.ndim != _GRID_DIMENSION:
             msg = "y_grid must be 1-D or 2-D."
             raise ValueError(msg)
         if arr.shape[0] != X.shape[0]:
@@ -1957,13 +2030,13 @@ class _NormalizationAccumulator:
         self._weight_sum = torch.zeros((batch_size, 1), device=device)
 
     def accumulate(self, predictions: Tensor, weights: Tensor) -> None:
-        self._weighted_sum = self._weighted_sum + torch.sum(predictions * weights, dim=1)
-        self._weight_sum = self._weight_sum + torch.sum(weights, dim=1)
+        self._weighted_sum += torch.sum(predictions * weights, dim=1)
+        self._weight_sum += torch.sum(weights, dim=1)
 
     def penalty(self) -> Tensor:
         integrals = self._weighted_sum / torch.clamp(self._weight_sum, min=1e-6)
         penalty = (integrals - 1.0) ** 2
-        return penalty.mean()
+        return cast(Tensor, penalty.mean())
 
 
 __all__: tuple[str, ...] = ("CondensiteTorchCDE", "CondensiteTorchCDEConfig")

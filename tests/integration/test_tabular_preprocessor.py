@@ -10,15 +10,27 @@ except OSError as exc:  # pragma: no cover - environment specific
 
 from condensite_torch import CondensiteTorchCDE, CondensiteTorchCDEConfig, TabularPreprocessorConfig
 
+_CATEGORICAL_THRESHOLD = 0.5
+_MISSING_PROBABILITY = 0.1
+
 
 def test_mixed_tabular_training_with_missing_values() -> None:
     rng = np.random.default_rng(0)
     n = 120
     numeric = rng.normal(size=(n, 2))
-    categorical = np.where(rng.random(size=(n, 1)) > 0.5, "red", "blue").astype(object)
-    categorical[rng.random(size=categorical.shape) < 0.1] = None
+    categorical = np.where(
+        rng.random(size=(n, 1)) > _CATEGORICAL_THRESHOLD,
+        "red",
+        "blue",
+    ).astype(object)
+    categorical[rng.random(size=categorical.shape) < _MISSING_PROBABILITY] = None
     features = np.concatenate([numeric, categorical], axis=1)
-    targets = 0.4 * numeric[:, 0] - 0.2 * numeric[:, 1] + (categorical[:, 0] == "red").astype(float) + 0.1 * rng.normal(size=n)
+    targets = (
+        0.4 * numeric[:, 0]
+        - 0.2 * numeric[:, 1]
+        + (categorical[:, 0] == "red").astype(float)
+        + 0.1 * rng.normal(size=n)
+    )
 
     config = CondensiteTorchCDEConfig(
         hidden_sizes=(16, 16),

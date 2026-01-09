@@ -7,6 +7,10 @@ from condensite_torch.distribution_metrics import js_divergence, ks_distance, wa
 
 pytestmark = pytest.mark.unit
 
+_KS_THRESHOLD = 0.05
+_WASSERSTEIN_THRESHOLD = 0.1
+_JS_THRESHOLD = 0.01
+
 
 def _cdf_from_pdf(pdf: np.ndarray, grid: np.ndarray) -> np.ndarray:
     widths = np.diff(grid, prepend=grid[0])
@@ -35,6 +39,6 @@ def test_metrics_increase_for_shifted_distributions() -> None:
     pdf_b = shifted_pdf.reshape(1, -1)
     cdf_a = _cdf_from_pdf(pdf_a, grid)
     cdf_b = _cdf_from_pdf(pdf_b, grid)
-    assert ks_distance(cdf_a, cdf_b) > 0.05
-    assert wasserstein_1(cdf_a, cdf_b, grid) > 0.1
-    assert js_divergence(pdf_a, pdf_b, grid) > 0.01
+    assert ks_distance(cdf_a, cdf_b) > _KS_THRESHOLD
+    assert wasserstein_1(cdf_a, cdf_b, grid) > _WASSERSTEIN_THRESHOLD
+    assert js_divergence(pdf_a, pdf_b, grid) > _JS_THRESHOLD

@@ -6,6 +6,7 @@ import copy
 import json
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 from numpy.typing import NDArray
@@ -111,7 +112,8 @@ class EnsembleCondensite:
             head (int | str | None): Optional bandwidth head selection forwarded to members.
 
         Returns:
-            tuple[NDArray[np.float64], NDArray[np.float64]]: `(mean, variance)` across ensemble members.
+            tuple[NDArray[np.float64], NDArray[np.float64]]: `(mean, variance)` across
+                ensemble members.
 
         Raises:
             RuntimeError: If `fit` has not been executed.
@@ -182,7 +184,9 @@ class EnsembleCondensite:
         Complexity:
             O(n_models * n_samples * grid_size).
         """
-        outputs = self._collect(lambda model: model.predict_quantile(X, q, y_grid=y_grid, head=head))
+        outputs = self._collect(
+            lambda model: model.predict_quantile(X, q, y_grid=y_grid, head=head),
+        )
         return _aggregate(outputs)
 
     def save(self, path: str | Path) -> None:
@@ -250,7 +254,10 @@ class EnsembleCondensite:
         ensemble._fitted = True
         return ensemble
 
-    def _collect(self, fn: callable) -> Sequence[NDArray[np.float64]]:
+    def _collect(
+        self,
+        fn: Callable[[CondensiteTorchCDE], NDArray[np.float64]],
+    ) -> Sequence[NDArray[np.float64]]:
         """Apply `fn` to every fitted member and return the stacked outputs.
 
         Args:
@@ -282,7 +289,9 @@ class EnsembleCondensite:
             raise RuntimeError(msg)
 
 
-def _aggregate(samples: Sequence[NDArray[np.float64]]) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+def _aggregate(
+    samples: Sequence[NDArray[np.float64]],
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     """Aggregate samples by computing mean/variance along the ensemble axis.
 
     Args:

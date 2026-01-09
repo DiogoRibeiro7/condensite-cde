@@ -11,6 +11,8 @@ except OSError as exc:  # pragma: no cover - depends on runner environment
 from condensite_torch import CondensiteTorchCDE, CondensiteTorchCDEConfig
 
 pytestmark = pytest.mark.integration
+_CDF_NEGATIVE_EPS = 1e-9
+_LOWER_START_BOUND = 0.05
 
 
 def _make_dataset(n_samples: int = 256) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -36,8 +38,8 @@ def test_predict_cdf_monotone_and_proper() -> None:
     estimator = CondensiteTorchCDE(config=config, random_seed=3).fit(X_train, y_train)
     cdf = estimator.predict_cdf(X_test, grid)
     diffs = np.diff(cdf, axis=1)
-    assert np.all(diffs >= -1e-9)
-    assert np.all(cdf >= -1e-9)
-    assert np.all(cdf <= 1.0 + 1e-9)
-    assert np.all(cdf[:, 0] <= 0.05)
+    assert np.all(diffs >= -_CDF_NEGATIVE_EPS)
+    assert np.all(cdf >= -_CDF_NEGATIVE_EPS)
+    assert np.all(cdf <= 1.0 + _CDF_NEGATIVE_EPS)
+    assert np.all(cdf[:, 0] <= _LOWER_START_BOUND)
     assert np.allclose(cdf[:, -1], 1.0, atol=1e-4)

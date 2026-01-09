@@ -5,6 +5,8 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+_MIN_GRID_POINTS = 2
+
 
 def _ensure_shapes(
     y_true: NDArray[np.floating],
@@ -16,7 +18,7 @@ def _ensure_shapes(
         msg = "y_true must contain at least one sample."
         raise ValueError(msg)
     y_grid_arr = np.asarray(y_grid, dtype=np.float64).reshape(-1)
-    if y_grid_arr.ndim != 1 or y_grid_arr.size < 2:
+    if y_grid_arr.ndim != 1 or y_grid_arr.size < _MIN_GRID_POINTS:
         msg = "y_grid must be a 1-D array with at least two points."
         raise ValueError(msg)
     if not np.all(np.diff(y_grid_arr) > 0):

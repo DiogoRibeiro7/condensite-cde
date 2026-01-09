@@ -5,15 +5,15 @@ from __future__ import annotations
 import csv
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import NDArray
 
 try:  # pragma: no cover - optional dependency
-    import pandas as pd  # type: ignore[import]
+    import pandas as pd  # type: ignore[import-untyped]
 except ModuleNotFoundError:  # pragma: no cover
-    pd = None  # type: ignore[assignment]
+    pd = None
 
 
 Format = Literal["csv", "parquet"]
@@ -65,7 +65,10 @@ def _resolve_format(path: str | Path, file_format: str) -> str:
     return "csv"
 
 
-def _load_csv(path: str | Path, target_column: str | None) -> tuple[ObjectArray, FloatArray | None, list[str]]:
+def _load_csv(
+    path: str | Path,
+    target_column: str | None,
+) -> tuple[ObjectArray, FloatArray | None, list[str]]:
     if pd is not None:
         df = pd.read_csv(path)
         y: FloatArray | None = None
@@ -102,7 +105,10 @@ def _load_csv(path: str | Path, target_column: str | None) -> tuple[ObjectArray,
     return X_arr, y_arr, remaining_names
 
 
-def _load_parquet(path: str | Path, target_column: str | None) -> tuple[ObjectArray, FloatArray | None, list[str]]:
+def _load_parquet(
+    path: str | Path,
+    target_column: str | None,
+) -> tuple[ObjectArray, FloatArray | None, list[str]]:
     if pd is None:
         msg = "Reading Parquet requires pandas; install pandas to enable this format."
         raise RuntimeError(msg)

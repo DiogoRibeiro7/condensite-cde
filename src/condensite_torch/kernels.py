@@ -44,7 +44,8 @@ def gaussian_kernel_torch(delta: Tensor, bandwidth: float | Tensor) -> Tensor:
         tuple(torch.broadcast_tensors(deltas, bw_tensor)),  # type: ignore[no-untyped-call]
     )
     norm = 1.0 / (bw_broadcasted * SQRT_TWO_PI)
-    return torch.exp(-0.5 * (deltas_broadcasted / bw_broadcasted) ** 2) * norm
+    result = torch.exp(-0.5 * (deltas_broadcasted / bw_broadcasted) ** 2) * norm
+    return cast(Tensor, result)
 
 
 def epanechnikov_kernel_np(delta: NDArray[np.floating], bandwidth: float) -> NDArray[np.floating]:
@@ -86,7 +87,7 @@ class KernelSpec:
 
 
 def _kernel_wrapper_torch(
-    kernel_fn: Callable[[Tensor, Tensor, float | Tensor], Tensor],
+    kernel_fn: Callable[[Tensor, float | Tensor], Tensor],
     y: Tensor,
     y_prime: Tensor,
     bandwidth: float | Tensor,
@@ -113,12 +114,32 @@ def _kernel_wrapper_np(
 
 _KERNELS: dict[str, KernelSpec] = {
     "gaussian": KernelSpec(
-        torch_fn=lambda y, y_prime, bw: _kernel_wrapper_torch(gaussian_kernel_torch, y, y_prime, bw),
-        numpy_fn=lambda y, y_prime, bw: _kernel_wrapper_np(gaussian_kernel_np, y, y_prime, bw),
+        torch_fn=lambda y, y_prime, bw: _kernel_wrapper_torch(
+            gaussian_kernel_torch,
+            y,
+            y_prime,
+            bw,
+        ),
+        numpy_fn=lambda y, y_prime, bw: _kernel_wrapper_np(
+            gaussian_kernel_np,
+            y,
+            y_prime,
+            bw,
+        ),
     ),
     "epanechnikov": KernelSpec(
-        torch_fn=lambda y, y_prime, bw: _kernel_wrapper_torch(epanechnikov_kernel_torch, y, y_prime, bw),
-        numpy_fn=lambda y, y_prime, bw: _kernel_wrapper_np(epanechnikov_kernel_np, y, y_prime, bw),
+        torch_fn=lambda y, y_prime, bw: _kernel_wrapper_torch(
+            epanechnikov_kernel_torch,
+            y,
+            y_prime,
+            bw,
+        ),
+        numpy_fn=lambda y, y_prime, bw: _kernel_wrapper_np(
+            epanechnikov_kernel_np,
+            y,
+            y_prime,
+            bw,
+        ),
     ),
 }
 

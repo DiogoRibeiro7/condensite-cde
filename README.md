@@ -141,12 +141,15 @@ poetry run python examples/distribution_comparison.py
 poetry run python examples/local_grids.py
 poetry run python examples/epistemic_ensemble.py
 poetry run python examples/custom_kernel_loss.py
+poetry run python examples/cross_validation.py
 poetry run python scripts/local_grid_benchmark.py
 poetry run python scripts/inference_benchmark.py --row-batch 64 --grid-chunk 64
 poetry run python -m benchmarks.run --quick
 condensite fit --train data/train.csv --target target --output-model artifacts/model
 condensite predict --model artifacts/model --data data/inference.csv --target target --output preds.csv
+condensite predict --model artifacts/model --data data/inference.csv --target target --output preds_with_intervals.csv --interval-coverage 0.9
 condensite report --model artifacts/model --data data/val.csv --target target --output-json reports/metrics.json
+condensite tune --train data/train.csv --target target --bandwidths 0.05,0.1 --m-aux-values 16,32 --run-root runs --run-name demo-run
 ```
 
 ## Release process
@@ -177,13 +180,15 @@ poetry run mypy src
 ## Licensing
 
 This project is licensed under the [MIT License](LICENSE).
-- **Multi-target outputs**: `MultiTargetCondensite` wraps one or more estimators to model each target dimension independently or autoregressively; `examples/multi_target.py` demonstrates training and sampling with correlated targets.
+- **Multi-target outputs**: `MultiTargetCondensite` now supports independent, autoregressive, and shared-trunk training so you can reuse a single encoder with per-target heads when `p>1`; `examples/multi_target.py` demonstrates all three modes with correlated targets.
 - **Distribution comparison**: `condensite_torch.distribution_metrics` exposes Wasserstein-1, Kolmogorov–Smirnov, and Jensen–Shannon distances to compare two predicted distributions on the same grid; run `examples/distribution_comparison.py` to see them in action.
 - **Local grids**: `condensite_torch.make_local_grid` builds per-row grids using estimated quantiles so inference focuses on the relevant range; see `examples/local_grids.py`. Defaults (`q_low=0.01`, `q_high=0.99`, `padding=0.1`) work well as a starting point—tighten the quantiles for faster inference on well-behaved targets or loosen them plus more padding for heavy tails.
 - **Ensembles**: `EnsembleCondensite` trains multiple seeds/bootstraps and returns mean/variance for densities/quantiles (see `examples/epistemic_ensemble.py`) to capture epistemic uncertainty.
-- **CLI**: `condensite` exposes `fit`, `predict`, and `report` subcommands so you can train/evaluate from CSV/Parquet without writing Python; see the quickstart commands below.
+- **CLI**: `condensite` exposes `fit`, `predict`, and `report` subcommands so you can train/evaluate from CSV/Parquet without writing Python; see the quickstart commands below. `condensite predict` now accepts `--interval-coverage` to emit predictive interval columns alongside quantiles.
 - **Model export**: `condensite_torch.export_torchscript` and `export_onnx` (optional dependency) trace any `nn.Module` with a sample tensor and save it for deployment; explicit preprocessing/feature concatenation must be handled by the caller.
 - **Monitoring**: `condensite_torch.monitoring` exposes PSI/KS and PIT drift helpers with configurable warn/alert thresholds; `scripts/monitor_report.py` writes a schema-stable JSON payload with per-feature statuses for dashboards.
+- **Hyper-parameter tuning**: `condensite_cde.tune.tune_bandwidth_m_aux` records each grid search under `runs/<timestamp>/` (config, metrics, artifacts) and reuses cached metrics via config hashes, and the CLI offers `condensite tune ... --resume` to continue unfinished sweeps.
+- **Cross-validation**: `condensite_cde.cross_validate` trains fresh folds with probabilistic metrics (NLL/CRPS/coverage) and can emit a JSON summary for dashboards; see `examples/cross_validation.py` for an end-to-end run.
 
 ### Local grid best practices
 

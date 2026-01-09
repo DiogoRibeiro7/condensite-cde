@@ -34,7 +34,7 @@ def main() -> None:
     )
     ensemble = EnsembleCondensite(config, n_models=3, bootstrap=True, random_seed=4).fit(X, y)
     grid = np.linspace(y.min() - 1.0, y.max() + 1.0, 48)
-    mean_pdf, var_pdf = ensemble.predict_density(X[:2], grid)
+    _mean_pdf, var_pdf = ensemble.predict_density(X[:2], grid)
     mean_quant, var_quant = ensemble.predict_quantile(X[:2], [0.5], y_grid=grid)
     for idx in range(2):
         print(f"Sample {idx}: density var mean={var_pdf[idx].mean():.4f}")

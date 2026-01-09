@@ -9,6 +9,8 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
+_EXPECTED_FEATURE_DIM = 2
+
 
 @dataclass(slots=True)
 class SchemaConstraints:
@@ -39,7 +41,8 @@ def validate_inputs(
     Args:
         X (NDArray[Any]): Feature matrix (2-D array-like).
         y (NDArray[Any] | None): Optional target array; required for training.
-        schema (SchemaConstraints | None): Optional constraints controlling dtype/missingness bounds.
+        schema (SchemaConstraints | None): Optional constraints controlling
+            dtype/missingness bounds.
         context (str): Best-effort hint used in error messages ("fit"/"predict").
 
     Returns:
@@ -55,7 +58,7 @@ def validate_inputs(
         O(n_samples * n_features) for scanning missingness and cardinalities.
     """
     arr = np.asarray(X, dtype=object)
-    if arr.ndim != 2:
+    if arr.ndim != _EXPECTED_FEATURE_DIM:
         msg = f"{context}: expected a 2-D feature matrix, got shape {arr.shape}."
         raise ValidationError(msg)
     n_rows = arr.shape[0]
@@ -140,7 +143,9 @@ def _safe_column(arr: NDArray[Any], idx: int) -> NDArray[Any]:
 def _is_missing(values: NDArray[Any]) -> NDArray[np.bool_]:
     """Return boolean mask for missing entries supporting object dtypes."""
     if values.dtype == object:
-        mask = np.array([val is None or (isinstance(val, float) and np.isnan(val)) for val in values])
+        mask = np.array(
+            [val is None or (isinstance(val, float) and np.isnan(val)) for val in values],
+        )
         return mask
     return np.isnan(values.astype(np.float64, copy=False))
 

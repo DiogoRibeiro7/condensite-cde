@@ -69,3 +69,88 @@ def test_tuner_returns_best_configuration(torch_available: bool) -> None:
     assert result.best_config.m_aux in {12, 16}
     assert len(result.history) == len(bandwidths) * len(aux_values)
     assert result.metric_name == "val_crps"
+
+
+def test_tuner_uses_cache_for_identical_configs(
+    torch_available: bool,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    assert torch_available
+    module = importlib.import_module("condensite_torch")
+    CondensiteTorchCDE = module.CondensiteTorchCDE
+    CondensiteTorchCDEConfig = module.CondensiteTorchCDEConfig
+    X, y = _make_small_dataset()
+    base_config = CondensiteTorchCDEConfig(
+        epochs=2,
+        patience=1,
+        batch_size=32,
+        val_fraction=0.2,
+    )
+    call_count = 0
+    original_fit = CondensiteTorchCDE.fit
+
+    def _counting_fit(self, X_train, y_train):
+        nonlocal call_count
+        call_count += 1
+        return original_fit(self, X_train, y_train)
+
+    monkeypatch.setattr(CondensiteTorchCDE, "fit", _counting_fit)
+    result = tune_bandwidth_m_aux(
+        X,
+        y,
+        bandwidths=[0.1, 0.1],
+        m_aux_values=[16],
+        base_config=base_config,
+        run_root=tmp_path,
+    )
+    assert call_count == 1
+    assert len(result.history) == 1
+    assert result.run_dir.exists()
+
+
+def test_tuner_resume_skips_completed_trials(
+    torch_available: bool,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    assert torch_available
+    module = importlib.import_module("condensite_torch")
+    CondensiteTorchCDE = module.CondensiteTorchCDE
+    CondensiteTorchCDEConfig = module.CondensiteTorchCDEConfig
+    X, y = _make_small_dataset()
+    base_config = CondensiteTorchCDEConfig(
+        epochs=2,
+        patience=1,
+        batch_size=32,
+        val_fraction=0.2,
+    )
+    run_name = "resume-run"
+    initial = tune_bandwidth_m_aux(
+        X,
+        y,
+        bandwidths=[0.12],
+        m_aux_values=[12],
+        base_config=base_config,
+        run_root=tmp_path,
+        run_name=run_name,
+    )
+    assert initial.history
+    config_path = tmp_path / run_name / "config.json"
+    assert config_path.exists()
+
+    def _fail_fit(self, *_args, **_kwargs):
+        raise AssertionError("fit should not be invoked during resume")
+
+    monkeypatch.setattr(CondensiteTorchCDE, "fit", _fail_fit)
+    resumed = tune_bandwidth_m_aux(
+        X,
+        y,
+        bandwidths=[0.12],
+        m_aux_values=[12],
+        base_config=base_config,
+        run_root=tmp_path,
+        run_name=run_name,
+        resume=True,
+    )
+    assert resumed.history == initial.history

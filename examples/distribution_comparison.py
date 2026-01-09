@@ -1,4 +1,4 @@
-"""Compare two models using Wasserstein/Kolmogorov–Smirnov/JS metrics."""
+"""Compare two models using Wasserstein/Kolmogorov-Smirnov/JS metrics."""
 
 from __future__ import annotations
 
@@ -31,8 +31,20 @@ def make_dataset(seed: int = 0) -> tuple[np.ndarray, np.ndarray]:
 def main() -> None:
     X, y = make_dataset()
     split = 180
-    config_a = CondensiteTorchCDEConfig(hidden_sizes=(24, 24), m_aux=24, epochs=5, patience=2, sampler="sobol")
-    config_b = CondensiteTorchCDEConfig(hidden_sizes=(32, 32), m_aux=32, epochs=6, patience=2, sampler="sobol")
+    config_a = CondensiteTorchCDEConfig(
+        hidden_sizes=(24, 24),
+        m_aux=24,
+        epochs=5,
+        patience=2,
+        sampler="sobol",
+    )
+    config_b = CondensiteTorchCDEConfig(
+        hidden_sizes=(32, 32),
+        m_aux=32,
+        epochs=6,
+        patience=2,
+        sampler="sobol",
+    )
     model_a = CondensiteTorchCDE(config=config_a, random_seed=3).fit(X[:split], y[:split])
     model_b = CondensiteTorchCDE(config=config_b, random_seed=4).fit(X[:split], y[:split])
     grid = np.linspace(y.min() - 1.0, y.max() + 1.0, 64)

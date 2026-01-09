@@ -5,12 +5,18 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
-from .estimator import CondensiteTorchCDE
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - avoids circular import at runtime
+    from .estimator import CondensiteTorchCDE
+
+_MIN_GRID_SIZE = 2
+FeatureArray = NDArray[np.floating] | NDArray[np.object_]
 
 
-def make_local_grid(
-    estimator: CondensiteTorchCDE,
-    X: NDArray[np.floating],
+def make_local_grid(  # noqa: PLR0913
+    estimator: "CondensiteTorchCDE",
+    X: FeatureArray,
     grid_size: int = 64,
     *,
     q_low: float = 0.01,
@@ -20,8 +26,8 @@ def make_local_grid(
     head: int | str | None = None,
 ) -> NDArray[np.float64]:
     """Construct per-row grids by expanding low/high quantiles with optional padding."""
-    if grid_size < 2:
-        msg = "grid_size must be >= 2."
+    if grid_size < _MIN_GRID_SIZE:
+        msg = f"grid_size must be >= {_MIN_GRID_SIZE}."
         raise ValueError(msg)
     if not 0.0 <= q_low < q_high <= 1.0:
         msg = "Require 0 <= q_low < q_high <= 1."

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
+import math
 
 import numpy as np
 from numpy.typing import NDArray
@@ -13,6 +14,8 @@ CATEGORICAL_ENCODING = Literal["onehot"]
 UNKNOWN_HANDLING = Literal["error", "use_unknown"]
 ObjectArray = NDArray[np.object_]
 FloatArray = NDArray[np.float64]
+
+_EXPECTED_INPUT_DIM = 2
 
 
 @dataclass(slots=True)
@@ -122,7 +125,8 @@ class TabularPreprocessor:
             int(key): str(value) for key, value in payload.get("categorical_modes", {}).items()
         }
         preprocessor.categorical_categories_ = {
-            int(key): list(value) for key, value in payload.get("categorical_categories", {}).items()
+            int(key): list(value)
+            for key, value in payload.get("categorical_categories", {}).items()
         }
         preprocessor.feature_names_ = list(payload.get("feature_names", []))
         preprocessor._fitted = True
@@ -133,10 +137,10 @@ class TabularPreprocessor:
         self.numeric_impute_.clear()
         for idx in self.numeric_indices:
             column = self._to_float_column(arr[:, idx])
-            median = np.nanmedian(column)
-            if np.isnan(median):
+            median = float(np.nanmedian(column))
+            if math.isnan(median):
                 median = 0.0
-            self.numeric_impute_[idx] = float(median)
+            self.numeric_impute_[idx] = median
 
     def _fit_categorical(self, arr: ObjectArray) -> None:
         self.categorical_modes_.clear()
@@ -144,7 +148,7 @@ class TabularPreprocessor:
         for idx in self.categorical_indices:
             column = np.asarray(arr[:, idx], dtype=object)
             normalized = self._normalize_categories(column)
-            mask_valid = normalized != ""
+            mask_valid = normalized.astype(bool)
             values = normalized[mask_valid]
             if values.size == 0:
                 mode = "__missing__"
@@ -177,11 +181,8 @@ class TabularPreprocessor:
         for idx in self.categorical_indices:
             column = np.asarray(arr[:, idx], dtype=object)
             normalized = self._normalize_categories(column)
-            normalized = np.where(
-                normalized == "",
-                self.categorical_modes_[idx],
-                normalized,
-            )
+            mask_present = normalized.astype(bool)
+            normalized = np.where(mask_present, normalized, self.categorical_modes_[idx])
             categories = self.categorical_categories_[idx]
             width = len(categories)
             if width == 0:
@@ -216,7 +217,7 @@ class TabularPreprocessor:
     @staticmethod
     def _ensure_2d(X: ObjectArray | Sequence[Sequence[Any]]) -> ObjectArray:
         arr = np.asarray(X, dtype=object)
-        if arr.ndim != 2:
+        if arr.ndim != _EXPECTED_INPUT_DIM:
             msg = f"Input must be 2-D, got shape {arr.shape}"
             raise ValueError(msg)
         return arr

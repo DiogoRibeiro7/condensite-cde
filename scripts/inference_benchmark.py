@@ -13,7 +13,10 @@ from condensite_cde import make_y_grid
 from condensite_torch import CondensiteTorchCDE, CondensiteTorchCDEConfig
 
 
-def _make_dataset(n_train: int = 1024, n_test: int = 512) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def _make_dataset(
+    n_train: int = 1024,
+    n_test: int = 512,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     rng = np.random.default_rng(21)
     X = rng.normal(size=(n_train + n_test, 4))
     y = 0.6 * np.sin(X[:, 0]) - 0.25 * X[:, 1] + 0.1 * rng.normal(size=X.shape[0])
@@ -28,9 +31,23 @@ def _time_predict(estimator: CondensiteTorchCDE, X: np.ndarray, grid: np.ndarray
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Benchmark inference batching.")
-    parser.add_argument("--output", default="reports/inference_benchmark.json", help="Where to store the JSON results.")
-    parser.add_argument("--row-batch", type=int, default=64, help="Row batch size for chunked mode.")
-    parser.add_argument("--grid-chunk", type=int, default=64, help="Grid chunk size for chunked mode.")
+    parser.add_argument(
+        "--output",
+        default="reports/inference_benchmark.json",
+        help="Where to store the JSON results.",
+    )
+    parser.add_argument(
+        "--row-batch",
+        type=int,
+        default=64,
+        help="Row batch size for chunked mode.",
+    )
+    parser.add_argument(
+        "--grid-chunk",
+        type=int,
+        default=64,
+        help="Grid chunk size for chunked mode.",
+    )
     args = parser.parse_args()
 
     X_train, y_train, X_test, _ = _make_dataset()

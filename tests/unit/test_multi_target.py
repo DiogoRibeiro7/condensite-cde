@@ -50,3 +50,18 @@ def test_autoregressive_mode_requires_context_and_uses_history() -> None:
     assert not np.allclose(pdf_good[:, 1, :], pdf_swapped[:, 1, :])
     with pytest.raises(ValueError):
         model.predict_density(X[:5], grid)
+
+
+def test_shared_mode_uses_single_estimator() -> None:
+    X, Y = _make_dataset(seed=4)
+    config = CondensiteTorchCDEConfig(epochs=3, patience=1, m_aux=10, sampler="sobol")
+    model = MultiTargetCondensite(config, mode="shared", random_seed=3).fit(X, Y)
+    assert model.mode == "shared"
+    assert model._shared_estimator is not None  # noqa: SLF001
+    grid = np.linspace(Y.min() - 0.5, Y.max() + 0.5, 32)
+    pdf = model.predict_density(X[:6], grid)
+    assert pdf.shape == (6, 2, grid.size)
+    quantiles = model.predict_quantile(X[:6], [0.25, 0.75], y_grid=grid)
+    assert quantiles.shape == (6, 2, 2)
+    samples = model.sample(X[:2], n_samples=4, seed=9)
+    assert samples.shape == (2, 4, 2)

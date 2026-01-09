@@ -36,9 +36,12 @@ def main() -> None:
     )
     independent = MultiTargetCondensite(config, mode="independent", random_seed=4).fit(X, Y)
     autoreg = MultiTargetCondensite(config, mode="autoregressive", random_seed=4).fit(X, Y)
+    shared = MultiTargetCondensite(config, mode="shared", random_seed=4).fit(X, Y)
     grid = np.linspace(Y.min() - 0.5, Y.max() + 0.5, 48)
     indep_metrics = independent.predict_quantile(X[:3], [0.1, 0.5, 0.9], y_grid=grid)
     print("Independent quantiles (first sample):", indep_metrics[0])
+    shared_pdf = shared.predict_density(X[:3], grid)
+    print("Shared-trunk pdf shape:", shared_pdf.shape)
     context = Y[:3]
     ar_pdf = autoreg.predict_density(X[:3], grid, y_context=context)
     print("Autoregressive pdf shape:", ar_pdf.shape)

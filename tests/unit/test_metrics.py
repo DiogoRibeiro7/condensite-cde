@@ -28,7 +28,8 @@ def test_crps_prefers_aligned_cdf() -> None:
     grid = np.linspace(-1.0, 1.0, 200)
     y_true = np.array([0.0])
     perfect = (grid >= 0.0).astype(float)[None, :]
-    shifted = (grid >= 0.3).astype(float)[None, :]
+    shift_point = 0.3
+    shifted = (grid >= shift_point).astype(float)[None, :]
     perfect[:, -1] = 1.0
     shifted[:, -1] = 1.0
     assert crps_from_cdf(y_true, grid, perfect) < crps_from_cdf(y_true, grid, shifted)

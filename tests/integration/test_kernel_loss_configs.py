@@ -8,6 +8,7 @@ import pytest
 from condensite_torch import CondensiteTorchCDE, CondensiteTorchCDEConfig
 
 pytestmark = pytest.mark.integration
+_MIN_HISTORY_LENGTH = 2
 
 
 def _toy_dataset(n: int = 96) -> tuple[np.ndarray, np.ndarray]:
@@ -29,7 +30,7 @@ def test_mae_loss_decreases_training_history() -> None:
     )
     estimator = CondensiteTorchCDE(config=config, random_seed=3).fit(X, y)
     history = estimator.training_history
-    assert len(history) >= 2
+    assert len(history) >= _MIN_HISTORY_LENGTH
     assert history[0]["train_loss"] > history[-1]["train_loss"]
 
 

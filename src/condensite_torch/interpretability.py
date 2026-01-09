@@ -12,6 +12,8 @@ from numpy.typing import NDArray
 from .estimator import CondensiteTorchCDE
 
 VALID_IMPORTANCE_METRICS: tuple[str, ...] = ("crps", "nll")
+_EXPECTED_FEATURE_DIM = 2
+_SINGLE_SAMPLE = 1
 
 
 @dataclass(slots=True)
@@ -40,7 +42,7 @@ def permutation_importance(  # noqa: PLR0913
     estimator._ensure_fitted()
     X_arr = np.asarray(X, dtype=np.float64)
     y_arr = np.asarray(y, dtype=np.float64).reshape(-1)
-    if X_arr.ndim != 2:
+    if X_arr.ndim != _EXPECTED_FEATURE_DIM:
         msg = f"X must be 2-D, got shape {X_arr.shape}"
         raise ValueError(msg)
     if X_arr.shape[0] != y_arr.shape[0]:
@@ -54,7 +56,14 @@ def permutation_importance(  # noqa: PLR0913
         msg = f"metric must be one of {VALID_IMPORTANCE_METRICS}, got {metric}"
         raise ValueError(msg)
 
-    baseline = _score(estimator, X_arr, y_arr, metric_lower, y_grid, head)
+    baseline = _score(
+        estimator,
+        X_arr,
+        y_arr,
+        metric=metric_lower,
+        y_grid=y_grid,
+        head=head,
+    )
     rng = np.random.default_rng(random_seed)
     n_features = X_arr.shape[1]
     raw = np.empty((n_features, n_repeats), dtype=np.float64)
@@ -64,7 +73,14 @@ def permutation_importance(  # noqa: PLR0913
             shuffled = X_arr.copy()
             permutation = rng.permutation(X_arr.shape[0])
             shuffled[:, feature_idx] = shuffled[permutation, feature_idx]
-            perturbed = _score(estimator, shuffled, y_arr, metric_lower, y_grid, head)
+            perturbed = _score(
+                estimator,
+                shuffled,
+                y_arr,
+                metric=metric_lower,
+                y_grid=y_grid,
+                head=head,
+            )
             raw[feature_idx, repeat] = perturbed - baseline
 
     return PermutationImportanceResult(
@@ -76,10 +92,11 @@ def permutation_importance(  # noqa: PLR0913
     )
 
 
-def _score(
+def _score(  # noqa: PLR0913
     estimator: CondensiteTorchCDE,
     X: NDArray[np.float64],
     y: NDArray[np.float64],
+    *,
     metric: str,
     y_grid: NDArray[np.floating] | None,
     head: int | str | None,
@@ -114,7 +131,7 @@ def what_if(  # noqa: PLR0913
     """Compare baseline vs counterfactual predictions after mutating selected features."""
     estimator._ensure_fitted()
     base_row = np.asarray(X_row, dtype=np.float64).reshape(1, -1)
-    if base_row.ndim != 2 or base_row.shape[0] != 1:
+    if base_row.ndim != _EXPECTED_FEATURE_DIM or base_row.shape[0] != _SINGLE_SAMPLE:
         msg = "X_row must represent a single sample (1-D vector)."
         raise ValueError(msg)
     n_features = base_row.shape[1]
@@ -167,7 +184,7 @@ def what_if(  # noqa: PLR0913
     )
 
 
-def _compute_what_if_outputs(
+def _compute_what_if_outputs(  # noqa: PLR0913, PLR0917
     estimator: CondensiteTorchCDE,
     X_row: NDArray[np.float64],
     outputs: Sequence[str],

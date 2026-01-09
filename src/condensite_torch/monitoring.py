@@ -11,6 +11,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 SchemaDict = dict[str, Any]
+_FEATURE_DIM = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,7 +127,7 @@ def compare_windows(
     if baseline.shape != current.shape:
         msg = "Baseline and current feature matrices must share the same shape."
         raise ValueError(msg)
-    if baseline.ndim != 2:
+    if baseline.ndim != _FEATURE_DIM:
         msg = "Feature matrices must be 2D (n_samples, n_features)."
         raise ValueError(msg)
     if len(feature_names) != baseline.shape[1]:
@@ -185,7 +186,7 @@ def compare_pit_windows(
     }
 
 
-def build_monitoring_report(
+def build_monitoring_report(  # noqa: PLR0913
     *,
     baseline_features: NDArray[np.floating],
     current_features: NDArray[np.floating],

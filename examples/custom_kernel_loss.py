@@ -25,7 +25,8 @@ def main() -> None:
     estimator = CondensiteTorchCDE(config=config, random_seed=5).fit(X, y)
     pdf = estimator.predict_density(X[:3], grid)
     print("PDF shape:", pdf.shape)
-    print("Train loss history:", [round(entry["train_loss"], 4) for entry in estimator.training_history])
+    history = [round(entry["train_loss"], 4) for entry in estimator.training_history]
+    print("Train loss history:", history)
 
 
 if __name__ == "__main__":

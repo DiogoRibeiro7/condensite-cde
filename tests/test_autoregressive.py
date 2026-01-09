@@ -63,5 +63,10 @@ def test_predict_marginal_quantile_requires_history_for_later_dims() -> None:
         ar_model.predict_marginal_quantile(X[:5], dim=1, q=0.5)
     medians_first = ar_model.predict_marginal_quantile(X[:5], dim=0, q=0.5)
     assert medians_first.shape == (5,)
-    quantiles_second = ar_model.predict_marginal_quantile(X[:5], dim=1, q=[0.1, 0.9], y_prefix=Y[:5, :1])
+    quantiles_second = ar_model.predict_marginal_quantile(
+        X[:5],
+        dim=1,
+        q=[0.1, 0.9],
+        y_prefix=Y[:5, :1],
+    )
     assert quantiles_second.shape == (5, 2)

@@ -12,7 +12,7 @@ try:
     import torch  # noqa: F401
 except OSError as exc:  # pragma: no cover
     print(f"Torch unavailable: {exc}")
-    raise SystemExit(1)
+    raise SystemExit(1) from exc
 
 from condensite_cde import make_y_grid
 from condensite_torch import CondensiteTorchCDE, CondensiteTorchCDEConfig
@@ -86,15 +86,18 @@ def _capture_snapshot(
     estimator: CondensiteTorchCDE,
     dtype_name: str,
     dtype: np.dtype,
-    X_test: np.ndarray,
-    y_test: np.ndarray,
-    grid: np.ndarray,
+    dataset: tuple[np.ndarray, np.ndarray, np.ndarray],
 ) -> tuple[dict[str, np.ndarray], dict[str, float | dict[str, float] | list[int]]]:
+    X_test, y_test, grid = dataset
     X_cast = X_test.astype(dtype)
     grid_cast = grid.astype(dtype)
     pdf = estimator.predict_density(X_cast, grid_cast).astype(np.float64)
     cdf = estimator.predict_cdf(X_cast, grid_cast).astype(np.float64)
-    quantiles = estimator.predict_quantile(X_cast, QUANTILE_PROBS, y_grid=grid_cast).astype(np.float64)
+    quantiles = estimator.predict_quantile(
+        X_cast,
+        QUANTILE_PROBS,
+        y_grid=grid_cast,
+    ).astype(np.float64)
     tail_right = _tail_matrix(estimator, X_cast, grid_cast, side="right")
     tail_left = _tail_matrix(estimator, X_cast, grid_cast, side="left")
     metrics = _compute_metrics(y_test, grid_cast, pdf, cdf, quantiles)
@@ -137,17 +140,17 @@ def main() -> None:
             estimator,
             dtype_name,
             dtype,
-            X_test,
-            y_test,
-            grid,
+            (X_test, y_test, grid),
         )
         np.savez(
             base / f"baseline_{dtype_name}.npz",
             **arrays,
         )
         metrics_payload["snapshots"][dtype_name] = snapshot_metrics
-    digest = hashlib.sha256(np.load(base / "baseline_float32.npz")["pdf"].tobytes()).hexdigest()
-    (base / "baseline_metrics.json").write_text(json.dumps(metrics_payload, indent=2), encoding="utf-8")
+    digest_source = np.load(base / "baseline_float32.npz")["pdf"].tobytes()
+    digest = hashlib.sha256(digest_source).hexdigest()
+    metrics_path = base / "baseline_metrics.json"
+    metrics_path.write_text(json.dumps(metrics_payload, indent=2), encoding="utf-8")
     print(f"Baselines refreshed. float32 PDF hash={digest[:16]}")
 
 

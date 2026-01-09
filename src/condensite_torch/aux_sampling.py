@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import numpy as np
 import torch
+from numpy.typing import NDArray
 from torch import Tensor
 from torch.quasirandom import SobolEngine
 
 _FIXED_GRIDS: dict[tuple[int, float, float], Tensor] = {}
 _EXPECTED_SHAPE_LEN = 2
 _IMPORTANCE_EPS = 1e-6
+FloatArray = NDArray[np.float64]
 
 
 def _ensure_shape(shape: tuple[int, int]) -> tuple[int, int]:
@@ -126,7 +128,7 @@ def _uniform_base_sample(method: str, shape: tuple[int, int], seed: int | None) 
 class ImportanceSampler:
     """Piecewise-uniform importance sampler built from empirical targets."""
 
-    def __init__(self, bin_edges: np.ndarray, bin_probs: np.ndarray) -> None:
+    def __init__(self, bin_edges: FloatArray, bin_probs: FloatArray) -> None:
         """Instantiate the sampler with explicit histogram bins.
 
         Args:
@@ -169,7 +171,7 @@ class ImportanceSampler:
     @classmethod
     def from_array(
         cls,
-        values: np.ndarray,
+        values: FloatArray,
         *,
         bins: int = 64,
         tail_bonus: float = 0.05,
@@ -255,7 +257,7 @@ class ImportanceSampler:
         pdf = self._bin_pdf.to(base_flat.device)[idx]
         # Weight inversely proportional to proposal pdf to preserve unbiased targets.
         weights = torch.where(pdf > 0, 1.0 / pdf, torch.ones_like(pdf))
-        weights = weights / torch.mean(weights)
+        weights /= torch.mean(weights)
         samples = samples.reshape(shape)
         weights = weights.reshape(shape)
         if device is not None:

@@ -24,7 +24,7 @@ def ks_distance(
     cdf_a: NDArray[np.floating],
     cdf_b: NDArray[np.floating],
 ) -> float:
-    """Return the Kolmogorov–Smirnov distance between two CDFs."""
+    """Return the Kolmogorov-Smirnov distance between two CDFs."""
     if cdf_a.shape != cdf_b.shape:
         msg = f"CDF arrays must have identical shape, got {cdf_a.shape} vs {cdf_b.shape}"
         raise ValueError(msg)
@@ -37,7 +37,7 @@ def js_divergence(
     y_grid: NDArray[np.floating],
     epsilon: float = EPS,
 ) -> float:
-    """Return Jensen–Shannon divergence between two PDFs on the same grid."""
+    """Return Jensen-Shannon divergence between two PDFs on the same grid."""
     pdf_arr_a, pdf_arr_b, grid = _validate_inputs(pdf_a, pdf_b, y_grid, kind="pdf")
     pdf_arr_a = _normalize_pdf(pdf_arr_a, grid, epsilon)
     pdf_arr_b = _normalize_pdf(pdf_arr_b, grid, epsilon)
@@ -76,7 +76,7 @@ def _normalize_pdf(
 ) -> NDArray[np.float64]:
     pdf_safe = np.clip(pdf, epsilon, None)
     mass = np.trapezoid(pdf_safe, x=y_grid, axis=-1)
-    mass = mass.reshape(mass.shape + (1,))
+    mass = mass.reshape((*mass.shape, 1))
     return pdf_safe / np.clip(mass, epsilon, None)
 
 

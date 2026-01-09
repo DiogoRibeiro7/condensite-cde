@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from condensite_torch import CondensiteTorchCDE, CondensiteTorchCDEConfig
 from condensite_torch.metrics import crps_from_cdf, nll_from_pdf
 
 
@@ -31,3 +32,25 @@ def test_better_pdf_has_lower_nll() -> None:
     nll_good = nll_from_pdf(y_true, y_grid, pdf_good[None, :])
     nll_bad = nll_from_pdf(y_true, y_grid, pdf_bad[None, :])
     assert nll_good < nll_bad
+
+
+def test_tail_probability_monotone() -> None:
+    rng = np.random.default_rng(1)
+    X = rng.normal(size=(64, 2))
+    y = 0.4 * X[:, 0] - 0.2 * X[:, 1] + 0.1 * rng.normal(size=64)
+    config = CondensiteTorchCDEConfig(
+        hidden_sizes=(16, 16),
+        epochs=4,
+        patience=2,
+        m_aux=16,
+        sampler="sobol",
+    )
+    estimator = CondensiteTorchCDE(config=config, random_seed=5).fit(X, y)
+    grid = estimator._default_y_grid()
+    thresholds = np.linspace(grid.min() - 0.2, grid.max() + 0.2, 5)
+    tail_probs = [
+        estimator.predict_tail_prob(X[:8], threshold=th, y_grid=grid, side="right")
+        for th in thresholds
+    ]
+    for earlier, later in zip(tail_probs, tail_probs[1:]):
+        assert np.all(earlier >= later)

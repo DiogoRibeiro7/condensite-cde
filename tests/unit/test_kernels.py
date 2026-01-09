@@ -60,10 +60,13 @@ def test_epanechnikov_kernel_is_nonnegative_and_integrates_to_one() -> None:
     bandwidth = 0.4
     delta = np.linspace(-2 * bandwidth, 2 * bandwidth, 4000)
     values = epanechnikov_kernel_np(delta, bandwidth)
-    assert np.all(values >= -1e-10)
-    assert np.all(values[np.abs(delta) > bandwidth + 1e-12] == pytest.approx(0.0))
+    negative_tol = 1e-10
+    support_margin = 1e-12
+    integral_tol = 1e-2
+    assert np.all(values >= -negative_tol)
+    assert np.all(values[np.abs(delta) > bandwidth + support_margin] == pytest.approx(0.0))
     integral = np.trapezoid(values, delta)
-    assert abs(integral - 1.0) < 1e-2
+    assert abs(integral - 1.0) < integral_tol
 
 
 def test_kernel_registry_returns_callable_specs() -> None:

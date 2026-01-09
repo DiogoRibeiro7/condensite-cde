@@ -10,6 +10,9 @@ from numpy.typing import NDArray
 
 from .estimator import CondensiteTorchCDE, CondensiteTorchCDEConfig
 
+_EXPECTED_FEATURE_DIM = 2
+_HISTORY_STACK_DIM = 3
+
 
 @dataclass
 class AutoregressiveCondensite:
@@ -24,10 +27,10 @@ class AutoregressiveCondensite:
     def fit(self, X: NDArray[np.floating], Y: NDArray[np.floating]) -> AutoregressiveCondensite:
         X_arr = np.asarray(X, dtype=np.float64)
         Y_arr = np.asarray(Y, dtype=np.float64)
-        if X_arr.ndim != 2:
+        if X_arr.ndim != _EXPECTED_FEATURE_DIM:
             msg = f"X must be 2-D, got {X_arr.shape}"
             raise ValueError(msg)
-        if Y_arr.ndim != 2:
+        if Y_arr.ndim != _EXPECTED_FEATURE_DIM:
             msg = f"Y must be 2-D, got {Y_arr.shape}"
             raise ValueError(msg)
         if X_arr.shape[0] != Y_arr.shape[0]:
@@ -68,7 +71,7 @@ class AutoregressiveCondensite:
             samples[:, :, dim] = draws
         return samples
 
-    def predict_marginal_quantile(
+    def predict_marginal_quantile(  # noqa: PLR0913 - public API keeps keyword options for clarity.
         self,
         X: NDArray[np.floating],
         dim: int,
@@ -105,7 +108,8 @@ class AutoregressiveCondensite:
     ) -> NDArray[np.float64]:
         n_obs = X.shape[0]
         if history.size == 0:
-            return np.repeat(X, history.shape[1] if history.ndim == 3 else 1, axis=0)
+            repeats = history.shape[1] if history.ndim == _HISTORY_STACK_DIM else 1
+            return np.repeat(X, repeats, axis=0)
         n_samples = history.shape[1]
         history_flat = history.reshape(n_obs * n_samples, -1)
         X_rep = np.repeat(X, n_samples, axis=0)

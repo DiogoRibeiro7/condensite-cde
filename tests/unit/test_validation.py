@@ -18,7 +18,7 @@ def test_validate_enforces_target_bounds() -> None:
     X = np.zeros((3, 1))
     y = np.array([-0.1, 0.2, 0.3])
     schema = SchemaConstraints(y_min=0.0, y_max=1.0)
-    with pytest.raises(ValidationError, match="below 0.0"):
+    with pytest.raises(ValidationError, match=r"below 0\.0"):
         validate_inputs(X, y, schema=schema)
 
 

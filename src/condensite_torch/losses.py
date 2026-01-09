@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import cast
 
 import torch
 from torch import Tensor
@@ -17,7 +18,7 @@ class LossSpec:
 
 
 def _mse(predictions: Tensor, targets: Tensor) -> Tensor:
-    return (predictions - targets) ** 2
+    return torch.square(predictions - targets)
 
 
 def _mae(predictions: Tensor, targets: Tensor) -> Tensor:

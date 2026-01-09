@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -51,7 +51,7 @@ def make_y_grid(
         if not np.isfinite(clip_low) or not np.isfinite(clip_high) or clip_high <= clip_low:
             msg = "clip must be (low, high) with finite low < high."
             raise ValueError(msg)
-        data = np.clip(data, clip_low, clip_high)
+        np.clip(data, clip_low, clip_high, out=data)
 
     mode_lower = mode.lower()
     if mode_lower == "quantile":

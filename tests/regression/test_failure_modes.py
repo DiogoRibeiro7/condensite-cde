@@ -12,6 +12,8 @@ from condensite_cde import make_y_grid
 from condensite_torch import CondensiteTorchCDE, CondensiteTorchCDEConfig
 from condensite_torch.metrics import nll_from_pdf
 
+_EXCESS_MASS_THRESHOLD = 1.5
+
 pytestmark = pytest.mark.regression
 
 
@@ -73,7 +75,7 @@ def test_disabling_normalization_breaks_pdf_integrals(monkeypatch: pytest.Monkey
     monkeypatch.setattr(CondensiteTorchCDE, "_predict_density_internal", fake_predict)
     pdf = estimator.predict_density(X_test, grid)
     mass = np.trapezoid(pdf, x=grid, axis=1)
-    assert np.any(mass > 1.5)
+    assert np.any(mass > _EXCESS_MASS_THRESHOLD)
 
 
 def test_invalid_bandwidth_raises() -> None:

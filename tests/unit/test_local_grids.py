@@ -17,6 +17,7 @@ from condensite_torch import (
 )
 
 pytestmark = pytest.mark.unit
+_CACHE_EXPECTED_REBUILDS = 2
 
 
 def _make_dataset(seed: int = 0) -> tuple[np.ndarray, np.ndarray]:
@@ -53,11 +54,13 @@ def test_local_grids_cover_targets_better_than_global() -> None:
         (y_test >= local_grids[:, 0]) & (y_test <= local_grids[:, -1]),
     )
     assert local_in >= global_in
-    pdf_local = estimator.predict_density(X_test[:5], local_grids[:5])
-    assert pdf_local.shape == (5, 64)
-    pdf_flag = estimator.predict_density(X_test[:5], None, use_local_grid=True)
-    assert pdf_flag.shape[0] == 5
-    assert pdf_local.shape == (5, 64)
+    preview = 5
+    grid_size = 64
+    pdf_local = estimator.predict_density(X_test[:preview], local_grids[:preview])
+    assert pdf_local.shape == (preview, grid_size)
+    pdf_flag = estimator.predict_density(X_test[:preview], None, use_local_grid=True)
+    assert pdf_flag.shape[0] == preview
+    assert pdf_local.shape == (preview, grid_size)
 
 
 def test_local_grid_cache_reused(monkeypatch, trained_estimator) -> None:
@@ -80,4 +83,4 @@ def test_local_grid_cache_reused(monkeypatch, trained_estimator) -> None:
         use_local_grid=True,
         local_grid_params={"padding": 0.2},
     )
-    assert call_count == 2
+    assert call_count == _CACHE_EXPECTED_REBUILDS

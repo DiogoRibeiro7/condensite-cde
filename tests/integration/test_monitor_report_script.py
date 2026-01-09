@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
-import subprocess
+import subprocess  # noqa: S404
 import sys
 from pathlib import Path
 
@@ -37,7 +37,11 @@ def _validate_report_schema(payload: dict, schema: dict) -> None:
     assert pit["drift"]["status"] in {"ok", "warn", "alert"}
 
 
-def test_monitor_report_script_generates_valid_payload(tmp_path, trained_estimator, torch_available) -> None:
+def test_monitor_report_script_generates_valid_payload(
+    tmp_path: Path,
+    trained_estimator,
+    torch_available,
+) -> None:
     estimator, X, y, _grid = trained_estimator
     model_dir = tmp_path / "model"
     estimator.save(model_dir)
@@ -62,8 +66,15 @@ def test_monitor_report_script_generates_valid_payload(tmp_path, trained_estimat
         "target",
         "--output",
         str(output_path),
+        "--schema",
+        "schemas/monitoring_report.schema.json",
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    result = subprocess.run(  # noqa: S603
+        cmd,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
     assert output_path.exists(), result.stderr
 
     payload = json.loads(output_path.read_text(encoding="utf-8"))

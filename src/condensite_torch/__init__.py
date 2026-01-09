@@ -31,9 +31,15 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "coverage": ("condensite_torch.diagnostics", "coverage"),
     "coverage_rate": ("condensite_torch.diagnostics", "coverage_rate"),
     "permutation_importance": ("condensite_torch.interpretability", "permutation_importance"),
-    "PermutationImportanceResult": ("condensite_torch.interpretability", "PermutationImportanceResult"),
+    "PermutationImportanceResult": (
+        "condensite_torch.interpretability",
+        "PermutationImportanceResult",
+    ),
     "what_if": ("condensite_torch.interpretability", "what_if"),
-    "WhatIfResult": ("condensite_torch.interpretability", "WhatIfResult"),
+    "WhatIfResult": (
+        "condensite_torch.interpretability",
+        "WhatIfResult",
+    ),
     "ConformalCDEWrapper": ("condensite_torch.conformal", "ConformalCDEWrapper"),
     "AutoregressiveCondensite": ("condensite_torch.autoregressive", "AutoregressiveCondensite"),
     "MultiTargetCondensite": ("condensite_torch.multi_target", "MultiTargetCondensite"),

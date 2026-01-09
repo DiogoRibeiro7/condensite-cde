@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import numpy as np
 import torch
 from torch import nn
 
 try:  # pragma: no cover - optional dependency
-    import onnx
+    import onnx  # type: ignore[import-not-found]
 except ModuleNotFoundError:  # pragma: no cover
-    onnx = None  # type: ignore[assignment]
+    onnx = None
+
+if TYPE_CHECKING:
+    from onnx import ModelProto  # noqa: F401
 
 
 def export_torchscript(
@@ -25,10 +28,10 @@ def export_torchscript(
     """Trace `module` with `example_input` and save it as a TorchScript artifact."""
     module.eval()
     example = _to_tensor(example_input)
-    traced = torch.jit.trace(module, example, strict=strict)
+    traced = torch.jit.trace(module, example, strict=strict)  # type: ignore[no-untyped-call]
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    torch.jit.save(traced, target)
+    torch.jit.save(traced, target)  # type: ignore[no-untyped-call]
     return target
 
 
@@ -50,7 +53,7 @@ def export_onnx(
     target.parent.mkdir(parents=True, exist_ok=True)
     torch.onnx.export(
         module,
-        example,
+        (example,),
         target.as_posix(),
         export_params=True,
         opset_version=opset_version,
