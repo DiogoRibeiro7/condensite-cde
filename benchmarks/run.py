@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from condensite_cde import make_y_grid
+from condensite_cde.reports import build_benchmark_report
 from condensite_torch import CondensiteTorchCDEConfig
 from condensite_torch.diagnostics import coverage
 from condensite_torch.metrics import crps_from_cdf, nll_from_pdf
@@ -210,7 +211,11 @@ def main() -> None:
     args = parser.parse_args()
     dataset_list = [name.strip() for name in args.datasets.split(",") if name.strip()]
     results = run_benchmarks(dataset_list, quick=args.quick)
-    payload = {"quick": args.quick, "results": results}
+    payload = build_benchmark_report(
+        results=results,
+        quick=args.quick,
+        metadata={"datasets": dataset_list},
+    )
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")

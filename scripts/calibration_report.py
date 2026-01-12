@@ -14,6 +14,7 @@ except OSError as exc:  # pragma: no cover - environment dependent
     raise SystemExit(0) from exc
 
 from condensite_cde import make_y_grid
+from condensite_cde.reports import build_calibration_report
 from condensite_torch import CondensiteTorchCDE, CondensiteTorchCDEConfig
 from condensite_torch.diagnostics import coverage_rate, pit_values
 
@@ -50,7 +51,7 @@ def _build_payload(
     X_val: np.ndarray,
     y_val: np.ndarray,
     grid: np.ndarray,
-) -> dict[str, dict[str, list[float]] | dict[str, float]]:
+) -> dict[str, object]:
     cdf = estimator.predict_cdf(X_val, grid)
     pit = pit_values(y_val, grid, cdf)
     hist_counts, hist_edges = np.histogram(pit, bins=20, range=(0.0, 1.0))
@@ -62,13 +63,20 @@ def _build_payload(
         cov = coverage_rate(y_val, quantiles[:, 0], quantiles[:, 1])
         coverage_results[f"p{int(level * 100):02d}"] = cov
 
-    return {
-        "pit": {
-            "counts": hist_counts.tolist(),
-            "bin_edges": hist_edges.tolist(),
-        },
-        "coverage": coverage_results,
+    histogram = {
+        "counts": hist_counts.tolist(),
+        "bin_edges": hist_edges.tolist(),
     }
+    metadata = {
+        "levels": levels,
+        "validation_rows": int(X_val.shape[0]),
+        "grid_points": int(grid.size),
+    }
+    return build_calibration_report(
+        pit_histogram=histogram,
+        coverage=coverage_results,
+        metadata=metadata,
+    )
 
 
 def main() -> None:

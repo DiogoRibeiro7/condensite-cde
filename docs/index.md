@@ -123,3 +123,13 @@ poetry run python -m benchmarks.run --datasets heteroscedastic,multimodal,heavy_
 ```
 
 The first command runs the CI-friendly quick mode; the second expands the dataset list and writes the JSON summary wherever you like (default is `benchmarks/results.json`, which is already ignored by git).
+
+## Report Schemas
+
+Every JSON artifact produced by the helper scripts embeds a `schema_version` and ships with a JSON Schema under `schemas/` so downstream dashboards can rely on stable contracts:
+
+- `schemas/calibration_report.schema.json` pairs with `scripts/calibration_report.py`.
+- `schemas/monitoring_report.schema.json` validates `scripts/monitor_report.py` output (passes automatically when `jsonschema` is installed).
+- `schemas/benchmark_report.schema.json` describes the payload from `python -m benchmarks.run`.
+
+Use `jsonschema -i artifact.json schemas/<name>.schema.json` in CI/CD to ensure compatibility whenever you upgrade Condensite.

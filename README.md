@@ -81,11 +81,29 @@ config = CondensiteTorchCDEConfig(
 )
 ```
 - **Sampling benchmark**: `scripts/aux_sampling_benchmark.py` trains a small model with `sampler in {iid, stratified, lhs, sobol, importance}` and prints JSON means/std-devs of CRPS/NLL so you can quantify the trade-offs.
-- **Benchmark suite**: `python -m benchmarks.run` trains Condensite alongside Gaussian + quantile baselines on heteroscedastic/multimodal datasets and writes JSON metrics (default `benchmarks/results.json`). Pass `--quick` for a CI-friendly downsampled run or `--output` to control the artifact path; the quick mode is what CI executes.
+- **Benchmark suite**: `python -m benchmarks.run` trains Condensite alongside Gaussian + quantile baselines on heteroscedastic/multimodal datasets and writes JSON metrics (default `benchmarks/results.json`) that adhere to `schemas/benchmark_report.schema.json`. Pass `--quick` for a CI-friendly downsampled run or `--output` to control the artifact path; the quick mode is what CI executes.
 - **Early stopping**: Use `val_fraction>0` or pass `(X_val, y_val)` along with `patience` / `monitor_metric` to enable validation-driven checkpoints; `examples/early_stopping.py` shows how to inspect the recorded metrics and restored epoch.
-- **Calibration diagnostics**: `scripts/calibration_report.py` emits PIT histograms and coverage stats so you can monitor probabilistic calibration over time.
+- **Calibration diagnostics**: `scripts/calibration_report.py` emits PIT histograms and coverage stats conforming to `schemas/calibration_report.schema.json` so dashboards can rely on the `schema_version`.
+- **Monitoring dashboards**: `scripts/monitor_report.py` compares baseline/current windows, applies drift thresholds, and validates the payload against `schemas/monitoring_report.schema.json` (bakes in `schema_version` + histogram layout) before writing JSON.
 - **Split-conformal intervals**: Wrap the estimator with `ConformalCDEWrapper` to obtain finite-sample predictive intervals, choosing `method="quantile"` or `"cdf"` for calibration style; see `examples/conformal_intervals.py`.
 - **AMP & GPU**: Set `amp=True` when training on CUDA devices; automatic casting and gradient scaling are enabled through PyTorch AMP.
+
+## Report Schemas
+
+Automation hooks (dashboards, alerting) can pin to stable report contracts—the JSON files above always include a `schema_version` and the corresponding schema lives under `schemas/*.schema.json`:
+
+| Report        | Generator                               | Schema file                              |
+| ------------- | --------------------------------------- | ---------------------------------------- |
+| Calibration   | `scripts/calibration_report.py`         | `schemas/calibration_report.schema.json` |
+| Monitoring    | `scripts/monitor_report.py`             | `schemas/monitoring_report.schema.json`  |
+| Benchmarks    | `python -m benchmarks.run [--quick]`    | `schemas/benchmark_report.schema.json`   |
+
+Use `jsonschema` (optional dependency) or the built-in schema version check to fail fast when the producer bumps versions:
+
+```bash
+pip install jsonschema
+jsonschema -i reports/calibration.json schemas/calibration_report.schema.json
+```
 
 ## Automated Tuning
 
