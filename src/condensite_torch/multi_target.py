@@ -17,7 +17,7 @@ MultiTargetMode = Literal["independent", "autoregressive", "shared"]
 
 
 class MultiTargetCondensite:
-    """Fit one estimator per target dimension with optional autoregressive conditioning."""
+    """Fit conditional-density estimators for multiple target dimensions."""
 
     def __init__(
         self,
@@ -39,6 +39,7 @@ class MultiTargetCondensite:
         self._fitted = False
 
     def fit(self, X: NDArray[np.floating], Y: NDArray[np.floating]) -> MultiTargetCondensite:
+        """Fit all target estimators atomically."""
         X_arr = np.asarray(X, dtype=np.float64)
         Y_arr = np.asarray(Y, dtype=np.float64)
         if X_arr.ndim != _EXPECTED_CONTEXT_DIM:
@@ -50,26 +51,32 @@ class MultiTargetCondensite:
         if X_arr.shape[0] != Y_arr.shape[0]:
             msg = "X and Y must share the first dimension."
             raise ValueError(msg)
+        if Y_arr.shape[1] == 0:
+            msg = "Y must contain at least one target column."
+            raise ValueError(msg)
+
+        self._fitted = False
         self._models.clear()
         self._shared_estimator = None
         self._dimension = Y_arr.shape[1]
+
         if self.mode == "shared":
             features, targets = self._flatten_shared_dataset(X_arr, Y_arr)
-            config = copy.deepcopy(self.base_config)
+            config = self._shared_config(X_arr.shape[1])
             estimator = CondensiteTorchCDE(config=config, random_seed=self.random_seed)
             estimator.fit(features, targets)
             self._shared_estimator = estimator
             self._fitted = True
             return self
+
+        built_models: list[CondensiteTorchCDE] = []
         for dim in range(self._dimension):
-            if self.mode == "independent":
-                features = X_arr
-            else:
-                features = self._augment_features(X_arr, Y_arr[:, :dim])
+            features = X_arr if self.mode == "independent" else self._augment_features(X_arr, Y_arr[:, :dim])
             config = copy.deepcopy(self.base_config)
             estimator = CondensiteTorchCDE(config=config, random_seed=self.random_seed + dim)
             estimator.fit(features, Y_arr[:, dim])
-            self._models.append(estimator)
+            built_models.append(estimator)
+        self._models = built_models
         self._fitted = True
         return self
 
@@ -113,12 +120,12 @@ class MultiTargetCondensite:
         if self.mode == "shared":
             estimator = self._require_shared_estimator()
             flat_density = density.reshape(-1, grid.size)
-            cdf = estimator._cdf_from_pdf(flat_density, grid)
+            cdf = estimator._cdf_from_pdf(flat_density, grid)  # noqa: SLF001
             cdfs[:] = cdf.reshape(X.shape[0], self._dimension, grid.size)
             return cdfs
         for dim, estimator in enumerate(self._models):
             per_dim_density = density[:, dim, :]
-            cdf = estimator._cdf_from_pdf(per_dim_density, grid)
+            cdf = estimator._cdf_from_pdf(per_dim_density, grid)  # noqa: SLF001
             cdfs[:, dim, :] = cdf
         return cdfs
 
@@ -140,18 +147,14 @@ class MultiTargetCondensite:
             features = self._tile_with_target_indicator(X_arr)
             values = estimator.predict_quantile(features, q_arr, y_grid=y_grid, head=head)
             stacked = values.reshape(X_arr.shape[0], self._dimension, q_arr.size)
-            if scalar:
-                return stacked[..., 0]
-            return stacked
+            return stacked[..., 0] if scalar else stacked
         per_dim = []
         for dim, estimator in enumerate(self._models):
             features = self._features_for_prediction(X_arr, y_context, dim)
             values = estimator.predict_quantile(features, q_arr, y_grid=y_grid, head=head)
             per_dim.append(values[:, None, :])
         stacked = np.concatenate(per_dim, axis=1)
-        if scalar:
-            return stacked[..., 0]
-        return stacked
+        return stacked[..., 0] if scalar else stacked
 
     def sample(
         self,
@@ -171,7 +174,7 @@ class MultiTargetCondensite:
         if self.mode == "shared":
             estimator = self._require_shared_estimator()
             features = self._tile_with_target_indicator(X_arr)
-            draws = estimator.sample(features, n_samples, seed=rng.integers(0, 2**32 - 1))
+            draws = estimator.sample(features, n_samples, seed=int(rng.integers(0, 2**32 - 1)))
             samples[:] = draws.reshape(n_obs, self._dimension, n_samples).transpose(0, 2, 1)
             return samples
         for dim, estimator in enumerate(self._models):
@@ -219,8 +222,7 @@ class MultiTargetCondensite:
         prefix_arr = np.asarray(prefix, dtype=np.float64)
         if prefix_arr.ndim == 1:
             prefix_arr = prefix_arr.reshape(-1, 1)
-        combined = np.concatenate([X, prefix_arr.astype(np.float64, copy=False)], axis=1)
-        return combined.astype(np.float64, copy=False)
+        return np.concatenate([X, prefix_arr], axis=1).astype(np.float64, copy=False)
 
     def _repeat_with_history(
         self,
@@ -236,6 +238,15 @@ class MultiTargetCondensite:
         X_rep = np.repeat(X, n_samples, axis=0)
         return self._augment_features(X_rep, history_flat)
 
+    def _shared_config(self, original_feature_count: int) -> CondensiteTorchCDEConfig:
+        """Ensure shared target indicators survive explicit preprocessing selection."""
+        config = copy.deepcopy(self.base_config)
+        preprocessor = config.preprocessor
+        if preprocessor is not None and preprocessor.numeric_indices is not None:
+            indicator_indices = range(original_feature_count, original_feature_count + self._dimension)
+            preprocessor.numeric_indices = sorted(set(preprocessor.numeric_indices).union(indicator_indices))
+        return config
+
     def _ensure_fitted(self) -> None:
         if not self._fitted:
             msg = "Call fit() before requesting predictions."
@@ -248,9 +259,7 @@ class MultiTargetCondensite:
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         indicator = np.tile(np.eye(self._dimension, dtype=np.float64), (X.shape[0], 1))
         repeated_X = np.repeat(X, self._dimension, axis=0)
-        features = np.concatenate([repeated_X, indicator], axis=1)
-        targets = Y.reshape(-1)
-        return features, targets
+        return np.concatenate([repeated_X, indicator], axis=1), Y.reshape(-1)
 
     def _tile_with_target_indicator(self, X: NDArray[np.float64]) -> NDArray[np.float64]:
         indicator = np.tile(np.eye(self._dimension, dtype=np.float64), (X.shape[0], 1))
