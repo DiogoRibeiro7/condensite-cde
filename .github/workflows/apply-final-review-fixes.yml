@@ -27,6 +27,23 @@ jobs:
         run: pip install poetry==2.2.1
       - name: Install dependencies
         run: poetry install --no-interaction
+      - name: Normalize applicator replacement cardinality
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/apply_final_review_fixes.py")
+          text = path.read_text(encoding="utf-8")
+          old = '    _replace(path, "np.trapezoid", "np.trapz")\n'
+          new = (
+              '    target = Path(path)\n'
+              '    text = target.read_text(encoding="utf-8")\n'
+              '    target.write_text(text.replace("np.trapezoid", "np.trapz"), encoding="utf-8")\n'
+          )
+          if old not in text:
+              raise RuntimeError("Expected trapezoid replacement call was not found")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
       - name: Apply fixes
         run: python scripts/apply_final_review_fixes.py
       - name: Format and lint
