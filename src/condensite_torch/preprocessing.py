@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
-import math
 
 import numpy as np
 from numpy.typing import NDArray
@@ -30,7 +30,7 @@ class TabularPreprocessorConfig:
 
 
 class TabularPreprocessor:
-    """Impute/encode mixed tabular inputs with deterministic feature ordering."""
+    """Impute and encode mixed tabular inputs with deterministic feature ordering."""
 
     def __init__(self, config: TabularPreprocessorConfig | None = None) -> None:
         self.config = config or TabularPreprocessorConfig()
@@ -43,20 +43,45 @@ class TabularPreprocessor:
         self._fitted = False
 
     def fit(self, X: ObjectArray) -> TabularPreprocessor:
+        """Learn column roles, imputers, and categorical vocabularies."""
         arr = self._ensure_2d(X)
         n_features = arr.shape[1]
-        self.numeric_indices = sorted(
-            self.config.numeric_indices
-            if self.config.numeric_indices is not None
-            else [idx for idx in range(n_features) if self._looks_numeric(arr[:, idx])]
+        all_indices = set(range(n_features))
+
+        configured_numeric = (
+            set(self.config.numeric_indices) if self.config.numeric_indices is not None else None
         )
-        numeric_set = set(self.numeric_indices)
-        if self.config.categorical_indices is not None:
-            self.categorical_indices = sorted(self.config.categorical_indices)
+        configured_categorical = (
+            set(self.config.categorical_indices)
+            if self.config.categorical_indices is not None
+            else None
+        )
+        if configured_numeric is not None and configured_categorical is not None:
+            overlap = configured_numeric.intersection(configured_categorical)
+            if overlap:
+                msg = f"Columns cannot be both numeric and categorical: {sorted(overlap)}"
+                raise ValueError(msg)
+
+        if configured_numeric is not None:
+            numeric = configured_numeric
+        elif configured_categorical is not None:
+            numeric = all_indices.difference(configured_categorical)
         else:
-            self.categorical_indices = [
-                idx for idx in range(n_features) if idx not in numeric_set
-            ]
+            numeric = {idx for idx in range(n_features) if self._looks_numeric(arr[:, idx])}
+
+        if configured_categorical is not None:
+            categorical = configured_categorical
+        else:
+            categorical = all_indices.difference(numeric)
+
+        selected = numeric.union(categorical)
+        invalid = [idx for idx in selected if idx < 0 or idx >= n_features]
+        if invalid:
+            msg = f"Configured column indices out of bounds: {sorted(invalid)}"
+            raise ValueError(msg)
+
+        self.numeric_indices = sorted(numeric)
+        self.categorical_indices = sorted(categorical)
         self._fit_numeric(arr)
         self._fit_categorical(arr)
         self.feature_names_ = self._build_feature_names()
@@ -64,28 +89,28 @@ class TabularPreprocessor:
         return self
 
     def fit_transform(self, X: ObjectArray) -> FloatArray:
+        """Fit preprocessing state and transform ``X``."""
         self.fit(X)
         return self.transform(X)
 
     def transform(self, X: ObjectArray) -> FloatArray:
+        """Transform ``X`` using fitted preprocessing state."""
         if not self._fitted:
             msg = "Call fit() before transform()."
             raise RuntimeError(msg)
         arr = self._ensure_2d(X)
         parts: list[FloatArray] = []
         if self.numeric_indices:
-            numeric_block = self._transform_numeric(arr)
-            parts.append(numeric_block)
+            parts.append(self._transform_numeric(arr))
         if self.categorical_indices:
-            cat_block = self._transform_categorical(arr)
-            parts.append(cat_block)
+            parts.append(self._transform_categorical(arr))
         if not parts:
             msg = "No features were selected for preprocessing; provide at least one column."
             raise ValueError(msg)
-        combined = np.hstack(parts)
-        return combined.astype(np.float64, copy=False)
+        return np.hstack(parts).astype(np.float64, copy=False)
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize fitted preprocessing state."""
         if not self._fitted:
             msg = "Cannot serialize an unfitted preprocessor."
             raise RuntimeError(msg)
@@ -107,6 +132,7 @@ class TabularPreprocessor:
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> TabularPreprocessor:
+        """Restore preprocessing state from ``to_dict`` output."""
         config_data = payload["config"]
         config = TabularPreprocessorConfig(
             categorical_indices=config_data.get("categorical_indices") or None,
@@ -132,7 +158,6 @@ class TabularPreprocessor:
         preprocessor._fitted = True
         return preprocessor
 
-    # ------------------------------------------------------------------ Internal helpers
     def _fit_numeric(self, arr: ObjectArray) -> None:
         self.numeric_impute_.clear()
         for idx in self.numeric_indices:
@@ -146,22 +171,22 @@ class TabularPreprocessor:
         self.categorical_modes_.clear()
         self.categorical_categories_.clear()
         for idx in self.categorical_indices:
-            column = np.asarray(arr[:, idx], dtype=object)
-            normalized = self._normalize_categories(column)
+            normalized = self._normalize_categories(np.asarray(arr[:, idx], dtype=object))
             mask_valid = normalized.astype(bool)
             values = normalized[mask_valid]
             if values.size == 0:
                 mode = "__missing__"
-                categories: list[str] = []
+                categories = ["__missing__"]
             else:
                 uniques, counts = np.unique(values, return_counts=True)
                 order = np.lexsort((uniques, -counts))
                 sorted_values = uniques[order]
                 mode = str(sorted_values[0])
                 categories = sorted_values.tolist()
-            if self.config.handle_unknown == "use_unknown":
-                if "__unknown__" not in categories:
-                    categories.append("__unknown__")
+                if "__missing__" not in categories and np.any(~mask_valid):
+                    categories.append("__missing__")
+            if self.config.handle_unknown == "use_unknown" and "__unknown__" not in categories:
+                categories.append("__unknown__")
             self.categorical_modes_[idx] = mode
             self.categorical_categories_[idx] = categories
 
@@ -179,16 +204,17 @@ class TabularPreprocessor:
     def _transform_categorical(self, arr: ObjectArray) -> FloatArray:
         rows: list[FloatArray] = []
         for idx in self.categorical_indices:
-            column = np.asarray(arr[:, idx], dtype=object)
-            normalized = self._normalize_categories(column)
+            normalized = self._normalize_categories(np.asarray(arr[:, idx], dtype=object))
             mask_present = normalized.astype(bool)
-            normalized = np.where(mask_present, normalized, self.categorical_modes_[idx])
+            missing_fill = (
+                "__missing__"
+                if "__missing__" in self.categorical_categories_[idx]
+                else self.categorical_modes_[idx]
+            )
+            normalized = np.where(mask_present, normalized, missing_fill)
             categories = self.categorical_categories_[idx]
-            width = len(categories)
-            if width == 0:
-                continue
             mapping = {cat: pos for pos, cat in enumerate(categories)}
-            encoded = np.zeros((arr.shape[0], width), dtype=np.float64)
+            encoded = np.zeros((arr.shape[0], len(categories)), dtype=np.float64)
             for row_idx, value in enumerate(normalized):
                 key = str(value)
                 if key in mapping:
@@ -230,10 +256,7 @@ class TabularPreprocessor:
                 normalized[idx] = ""
             else:
                 try:
-                    if isinstance(value, float) and np.isnan(value):
-                        normalized[idx] = ""
-                    else:
-                        normalized[idx] = str(value)
+                    normalized[idx] = "" if isinstance(value, float) and np.isnan(value) else str(value)
                 except TypeError:
                     normalized[idx] = ""
         return normalized.astype(str)
@@ -245,18 +268,18 @@ class TabularPreprocessor:
         except (TypeError, ValueError) as exc:
             msg = "Numeric column contains non-numeric values."
             raise ValueError(msg) from exc
+        if np.any(np.isinf(column)):
+            msg = "Numeric column contains infinite values."
+            raise ValueError(msg)
         return column
 
     @staticmethod
     def _looks_numeric(column: NDArray[Any]) -> bool:
-        dtype = np.asarray(column).dtype
-        if np.issubdtype(dtype, np.number):
-            return True
         try:
-            _ = np.asarray(column, dtype=np.float64)
-            return True
+            values = np.asarray(column, dtype=np.float64)
         except (TypeError, ValueError):
             return False
+        return not np.any(np.isinf(values))
 
 
 __all__ = ("TabularPreprocessor", "TabularPreprocessorConfig")
