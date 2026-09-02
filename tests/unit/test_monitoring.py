@@ -25,8 +25,15 @@ def test_population_stability_index_bounds() -> None:
     assert psi == pytest.approx(0.0, abs=1e-6)
 
 
+def test_population_stability_index_detects_reference_shift() -> None:
+    base = np.linspace(-1.0, 1.0, 200)
+    shifted = np.linspace(4.0, 6.0, 80)
+    assert population_stability_index(base, shifted) > 0.25
+
+
 def test_ks_drift_increases_with_shift() -> None:
-    base = np.random.normal(size=200)
+    rng = np.random.default_rng(7)
+    base = rng.normal(size=200)
     current = base + 0.5
     score = ks_drift(base, base)
     shifted = ks_drift(base, current)
@@ -44,11 +51,18 @@ def test_pit_histogram_and_drift() -> None:
     assert np.isfinite(drift_value)
 
 
+def test_pit_histogram_rejects_out_of_range_values() -> None:
+    with pytest.raises(ValueError, match=r"\[0, 1\]"):
+        pit_histogram(np.array([0.1, 1.2]))
+
+
 def test_drift_thresholds_validate() -> None:
     with pytest.raises(ValueError):
         DriftThresholds(-0.1, 0.2)
     with pytest.raises(ValueError):
         DriftThresholds(0.2, 0.1)
+    with pytest.raises(ValueError):
+        DriftThresholds(float("nan"), 0.2)
 
 
 def test_compare_windows_statuses() -> None:
@@ -65,6 +79,21 @@ def test_compare_windows_statuses() -> None:
     shifted[:, 0] = 5.0
     stats_bad = compare_windows(base, shifted, ["f0", "f1"], thresholds=thresholds)
     assert stats_bad[0]["psi"]["status"] in {"warn", "alert"}
+
+
+def test_compare_windows_allows_different_window_lengths() -> None:
+    rng = np.random.default_rng(11)
+    baseline = rng.normal(size=(120, 3))
+    current = rng.normal(size=(35, 3))
+    stats = compare_windows(baseline, current, ["a", "b", "c"])
+    assert len(stats) == 3
+
+
+def test_compare_windows_rejects_feature_dimension_mismatch() -> None:
+    baseline = np.zeros((20, 2))
+    current = np.zeros((10, 3))
+    with pytest.raises(ValueError, match="same number of columns"):
+        compare_windows(baseline, current, ["a", "b"])
 
 
 def test_compare_pit_windows_schema_and_status() -> None:
