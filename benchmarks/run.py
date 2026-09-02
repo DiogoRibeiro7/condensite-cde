@@ -21,6 +21,7 @@ from .models import (
     CondensiteBaseline,
     ConditionalGaussianBaseline,
     QuantileRegressionBaseline,
+    TrainingConfig,
 )
 
 DATASETS = ("heteroscedastic", "multimodal")
@@ -33,34 +34,14 @@ def _evaluate(
     X_test: np.ndarray,
     y_test: np.ndarray,
 ) -> dict[str, float]:
-    """Fit `model` and compute evaluation metrics on the test set.
-
-    Args:
-        model (BenchmarkModel): Baseline to evaluate.
-        X_train (np.ndarray): Training features.
-        y_train (np.ndarray): Training targets.
-        X_test (np.ndarray): Test features.
-        y_test (np.ndarray): Test targets.
-
-    Returns:
-        dict[str, float]: Dictionary with `nll`, `crps`, `integral_error`, and `coverage90`.
-
-    Raises:
-        ValueError: If grid creation fails.
-
-    Side Effects:
-        Trains `model` in-place.
-
-    Complexity:
-        O(model.fit + n_test * grid_size).
-    """
+    """Fit a model and compute probabilistic evaluation metrics."""
     grid = make_y_grid(y_train, grid_size=96, mode="quantile")
     model.fit(X_train, y_train)
     pdf = model.predict_pdf(X_test, grid)
     cdf = model.predict_cdf(X_test, grid)
     nll = float(nll_from_pdf(y_test, grid, pdf))
     crps = float(crps_from_cdf(y_test, grid, cdf))
-    mass = np.trapezoid(pdf, x=grid, axis=1)
+    mass = np.trapz(pdf, x=grid, axis=1)
     integral_error = float(np.mean(np.abs(mass - 1.0)))
     tail = 0.05
     lo = np.array([np.interp(tail, cdf_row, grid) for cdf_row in cdf])
@@ -75,26 +56,10 @@ def _downsample(
     target: int,
     seed: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Subsample without replacement for the quick benchmark mode.
-
-    Args:
-        X (np.ndarray): Feature matrix.
-        y (np.ndarray): Target vector.
-        target (int): Desired number of rows to keep.
-        seed (int): RNG seed to ensure determinism.
-
-    Returns:
-        tuple[np.ndarray, np.ndarray]: Downsampled `(X, y)` pair.
-
-    Raises:
-        ValueError: If `target` is negative.
-
-    Side Effects:
-        None.
-
-    Complexity:
-        O(n) due to the RNG selection.
-    """
+    """Subsample without replacement for the quick benchmark mode."""
+    if target < 0:
+        msg = "target must be non-negative."
+        raise ValueError(msg)
     if target >= X.shape[0]:
         return X, y
     rng = np.random.default_rng(seed)
@@ -103,25 +68,8 @@ def _downsample(
 
 
 def _build_baselines(input_dim: int, quick: bool) -> dict[str, BenchmarkModel]:
-    """Instantiate all baselines with consistent hyper-parameters.
-
-    Args:
-        input_dim (int): Feature dimension.
-        quick (bool): Whether to use faster configs for CI.
-
-    Returns:
-        dict[str, BenchmarkModel]: Mapping of baseline name to configured model.
-
-    Raises:
-        None.
-
-    Side Effects:
-        Seeds are baked into the baseline constructors.
-
-    Complexity:
-        O(1) instantiation.
-    """
-    config = CondensiteTorchCDEConfig(
+    """Instantiate all baselines with consistent hyper-parameters."""
+    condensite_config = CondensiteTorchCDEConfig(
         hidden_sizes=(32, 32) if quick else (64, 64),
         m_aux=24 if quick else 48,
         epochs=4 if quick else 6,
@@ -130,17 +78,20 @@ def _build_baselines(input_dim: int, quick: bool) -> dict[str, BenchmarkModel]:
         bandwidth=0.1,
         normalization_lambda=0.1,
     )
+    baseline_training = TrainingConfig(
+        hidden_sizes=(32, 32) if quick else (64, 64),
+        epochs=4 if quick else 8,
+        batch_size=64 if quick else 128,
+    )
     return {
-        "condensite": CondensiteBaseline(config=config, random_seed=7),
+        "condensite": CondensiteBaseline(config=condensite_config, random_seed=7),
         "gaussian": ConditionalGaussianBaseline(
             input_dim=input_dim,
-            epochs=4 if quick else 8,
-            batch_size=64 if quick else 128,
+            training=baseline_training,
         ),
         "quantile": QuantileRegressionBaseline(
             input_dim=input_dim,
-            epochs=4 if quick else 8,
-            batch_size=64 if quick else 128,
+            training=baseline_training,
         ),
     }
 
@@ -149,24 +100,7 @@ def run_benchmarks(
     dataset_names: Iterable[str],
     quick: bool,
 ) -> dict[str, dict[str, dict[str, float]]]:
-    """Run each baseline on the requested datasets.
-
-    Args:
-        dataset_names (Iterable[str]): Names to load via `benchmarks.datasets`.
-        quick (bool): Whether to apply downsampling for faster iterations.
-
-    Returns:
-        dict[str, dict[str, dict[str, float]]]: Nested mapping dataset -> baseline -> metrics.
-
-    Raises:
-        ValueError: If a dataset name is unknown.
-
-    Side Effects:
-        Trains models in-place and may allocate GPU/CPU tensors.
-
-    Complexity:
-        O(sum_datasets training cost).
-    """
+    """Run each baseline on the requested datasets."""
     results: dict[str, dict[str, dict[str, float]]] = {}
     for name in dataset_names:
         data = load_dataset(name)
@@ -183,23 +117,7 @@ def run_benchmarks(
 
 
 def main() -> None:
-    """Parse CLI arguments and run the benchmark suite.
-
-    Args:
-        None.
-
-    Returns:
-        None.
-
-    Raises:
-        SystemExit: Propagated from argparse on invalid arguments.
-
-    Side Effects:
-        Writes JSON results to disk and prints a short summary.
-
-    Complexity:
-        O(sum_datasets training cost).
-    """
+    """Parse CLI arguments and run the benchmark suite."""
     parser = argparse.ArgumentParser(description="Benchmark Condensite vs baseline models.")
     parser.add_argument(
         "--datasets",
@@ -218,7 +136,7 @@ def main() -> None:
     )
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    output_path.write_text(json.dumps(payload, indent=2, allow_nan=False), encoding="utf-8")
     print(f"Benchmark results saved to {output_path}")
 
 
