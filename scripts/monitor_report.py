@@ -6,7 +6,7 @@ import argparse
 import importlib
 import json
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -19,7 +19,6 @@ from condensite_torch.monitoring import (
     build_monitoring_report,
 )
 
-FeatureArray = NDArray[np.float64]
 FloatArray = NDArray[np.float64]
 
 
@@ -29,7 +28,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--baseline", required=True)
     parser.add_argument("--current", required=True)
     parser.add_argument("--target", required=True)
-    parser.add_argument("--format", default="auto", choices=["auto", "csv", "parquet"])
+    parser.add_argument("--format", default="auto", choices=["auto", "csv", "tsv", "parquet"])
     parser.add_argument("--output", required=True)
     parser.add_argument(
         "--schema",
@@ -51,26 +50,29 @@ def _pit_values_for_dataset(
     grid: FloatArray,
     cdf_values: FloatArray,
 ) -> FloatArray:
+    """Interpolate PIT values with explicit distribution-boundary semantics."""
+    if not np.all(np.isfinite(targets)):
+        msg = "Targets must contain only finite values."
+        raise ValueError(msg)
     values = [
-        np.interp(y, grid, cdf) for y, cdf in zip(targets, cdf_values, strict=True)
+        np.interp(y, grid, cdf, left=0.0, right=1.0)
+        for y, cdf in zip(targets, cdf_values, strict=True)
     ]
     return np.asarray(values, dtype=np.float64)
 
 
 def main() -> None:
     args = _parse_args()
-
     estimator = CondensiteTorchCDE.load(args.model, map_location="cpu")
-    baseline = load_tabular(
-        args.baseline,
-        target_column=args.target,
-        file_format=args.format,
-    )
-    current = load_tabular(
-        args.current,
-        target_column=args.target,
-        file_format=args.format,
-    )
+    baseline = load_tabular(args.baseline, target_column=args.target, file_format=args.format)
+    current = load_tabular(args.current, target_column=args.target, file_format=args.format)
+    if baseline[2] != current[2]:
+        msg = (
+            "Baseline and current datasets must expose identical feature names in the same order. "
+            f"Got baseline={baseline[2]!r}, current={current[2]!r}."
+        )
+        raise ValueError(msg)
+
     baseline_features = np.asarray(baseline[0], dtype=np.float64)
     current_features = np.asarray(current[0], dtype=np.float64)
     if baseline[1] is None or current[1] is None:
@@ -78,7 +80,7 @@ def main() -> None:
         raise ValueError(msg)
     baseline_targets = np.asarray(baseline[1], dtype=np.float64)
     current_targets = np.asarray(current[1], dtype=np.float64)
-    grid = estimator._default_y_grid()
+    grid = estimator._default_y_grid()  # noqa: SLF001
     cdf_base = estimator.predict_cdf(baseline_features, grid)
     cdf_curr = estimator.predict_cdf(current_features, grid)
     pit_base = _pit_values_for_dataset(baseline_targets, grid, cdf_base)
@@ -109,8 +111,9 @@ def main() -> None:
     _validate_against_schema(payload, args.schema)
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    print(json.dumps(payload, indent=2))
+    rendered = json.dumps(payload, indent=2, allow_nan=False)
+    out_path.write_text(rendered, encoding="utf-8")
+    print(rendered)
 
 
 def _validate_against_schema(payload: dict[str, Any], schema_path: str | None) -> None:
@@ -136,10 +139,9 @@ def _validate_against_schema(payload: dict[str, Any], schema_path: str | None) -
 
 def _load_jsonschema() -> Any | None:
     try:
-        module = importlib.import_module("jsonschema")
+        return importlib.import_module("jsonschema")
     except ModuleNotFoundError:  # pragma: no cover - optional dependency
         return None
-    return module
 
 
 if __name__ == "__main__":
