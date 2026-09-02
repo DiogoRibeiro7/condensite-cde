@@ -36,27 +36,7 @@ def validate_inputs(
     schema: SchemaConstraints | None = None,
     context: str = "fit",
 ) -> None:
-    """Validate tabular inputs against a schema and safety rules.
-
-    Args:
-        X (NDArray[Any]): Feature matrix (2-D array-like).
-        y (NDArray[Any] | None): Optional target array; required for training.
-        schema (SchemaConstraints | None): Optional constraints controlling
-            dtype/missingness bounds.
-        context (str): Best-effort hint used in error messages ("fit"/"predict").
-
-    Returns:
-        None.
-
-    Raises:
-        ValidationError: If a constraint is violated.
-
-    Side Effects:
-        None.
-
-    Complexity:
-        O(n_samples * n_features) for scanning missingness and cardinalities.
-    """
+    """Validate tabular inputs against a schema and safety rules."""
     arr = np.asarray(X, dtype=object)
     if arr.ndim != _EXPECTED_FEATURE_DIM:
         msg = f"{context}: expected a 2-D feature matrix, got shape {arr.shape}."
@@ -71,6 +51,8 @@ def validate_inputs(
             msg = f"{context}: X rows ({n_rows}) must match y rows ({y_arr.shape[0]})."
             raise ValidationError(msg)
         _validate_targets(y_arr, schema)
+
+    _validate_numeric_infinities(arr, schema)
     if schema is None:
         return
     _validate_missingness(arr, schema)
@@ -78,19 +60,48 @@ def validate_inputs(
 
 
 def _validate_targets(values: NDArray[Any], schema: SchemaConstraints | None) -> None:
-    """Validate target bounds and numeric coherence."""
-    if schema is None:
-        return
-    numeric = np.asarray(values, dtype=np.float64)
+    """Validate target finiteness and optional user-supplied bounds."""
+    try:
+        numeric = np.asarray(values, dtype=np.float64)
+    except (TypeError, ValueError) as exc:
+        msg = "Targets must be numeric."
+        raise ValidationError(msg) from exc
     if not np.all(np.isfinite(numeric)):
         msg = "Targets contain NaN or inf values; please clean the array before training."
         raise ValidationError(msg)
+    if schema is None:
+        return
     if schema.y_min is not None and np.any(numeric < schema.y_min - 1e-12):
         msg = f"Targets have values below {schema.y_min}; check scaling assumptions."
         raise ValidationError(msg)
     if schema.y_max is not None and np.any(numeric > schema.y_max + 1e-12):
         msg = f"Targets exceed {schema.y_max}; check scaling assumptions."
         raise ValidationError(msg)
+
+
+def _validate_numeric_infinities(
+    arr: NDArray[Any],
+    schema: SchemaConstraints | None,
+) -> None:
+    """Reject infinities in numeric columns while leaving NaN to missingness policy."""
+    if schema is not None and schema.numeric_indices is not None:
+        indices = list(schema.numeric_indices)
+    else:
+        indices = list(range(arr.shape[1]))
+
+    for idx in indices:
+        column = _safe_column(arr, idx)
+        try:
+            numeric = np.asarray(column, dtype=np.float64)
+        except (TypeError, ValueError):
+            # Without an explicit numeric schema this is simply a categorical column.
+            if schema is not None and schema.numeric_indices is not None:
+                msg = f"Numeric column {idx} contains non-numeric values."
+                raise ValidationError(msg) from None
+            continue
+        if np.any(np.isinf(numeric)):
+            msg = f"Numeric column {idx} contains infinite values."
+            raise ValidationError(msg)
 
 
 def _validate_missingness(arr: NDArray[Any], schema: SchemaConstraints) -> None:
