@@ -56,7 +56,6 @@ class _AdapterBase:
             self._fitted = True
         self._prediction_grid: NDArray[np.float64] | None = None
 
-    # ------------------------------------------------------------------ Shared helpers
     def _ensure_fitted(self) -> None:
         if not self._fitted:
             msg = "Call fit() before requesting predictions."
@@ -93,9 +92,7 @@ class _AdapterBase:
             "grid_size": self.grid_size,
             "grid_mode": self.grid_mode,
             "prediction_grid": (
-                None
-                if self._prediction_grid is None
-                else self._prediction_grid.tolist()
+                None if self._prediction_grid is None else self._prediction_grid.tolist()
             ),
         }
         payload.update(self._extra_state())
@@ -146,7 +143,6 @@ class SklearnCondensiteRegressor(_AdapterBase):
             raise ValueError(msg)
         self.prediction_strategy = strategy
 
-    # ------------------------------------------------------------------ sklearn API
     def fit(self, X: Any, y: Any) -> SklearnCondensiteRegressor:
         X_arr = np.asarray(X, dtype=object)
         y_arr = np.asarray(y, dtype=np.float64).reshape(-1)
@@ -171,7 +167,7 @@ class SklearnCondensiteRegressor(_AdapterBase):
             grid_arr = make_y_grid(target, grid_size=self.grid_size, mode=self.grid_mode)
         pdf = self._estimator.predict_density(X_arr, grid_arr)
         weighted = pdf * grid_arr.reshape(1, -1)
-        return np.trapezoid(weighted, x=grid_arr, axis=1)
+        return np.trapz(weighted, x=grid_arr, axis=1)
 
     def predict_density(
         self,
@@ -208,6 +204,7 @@ class SklearnCondensiteRegressor(_AdapterBase):
 
     def get_params(self, deep: bool = True) -> dict[str, Any]:
         params: dict[str, Any] = {
+            "config": copy.deepcopy(self.config),
             "random_seed": self.random_seed,
             "prediction_strategy": self.prediction_strategy,
             "grid_size": self.grid_size,
@@ -221,7 +218,14 @@ class SklearnCondensiteRegressor(_AdapterBase):
     def set_params(self, **params: Any) -> SklearnCondensiteRegressor:
         config_updates: dict[str, Any] = {}
         for key, value in params.items():
-            if key == "random_seed":
+            if key == "config":
+                if value is not None and not isinstance(value, CondensiteTorchCDEConfig):
+                    msg = "config must be CondensiteTorchCDEConfig or None."
+                    raise TypeError(msg)
+                self.config = (
+                    copy.deepcopy(value) if value is not None else CondensiteTorchCDEConfig()
+                )
+            elif key == "random_seed":
                 self.random_seed = int(value)
             elif key == "prediction_strategy":
                 strategy = str(value).lower()
@@ -250,7 +254,6 @@ class SklearnCondensiteRegressor(_AdapterBase):
         self._reset_estimator()
         return self
 
-    # ------------------------------------------------------------------ Persistence
     def _extra_state(self) -> dict[str, Any]:
         return {"prediction_strategy": self.prediction_strategy}
 
@@ -295,7 +298,6 @@ class PandasCondensiteAdapter(SklearnCondensiteRegressor):
         self._feature_columns = list(feature_columns) if feature_columns is not None else None
         self._target_column = target_column
 
-    # ------------------------------------------------------------------ Pandas helpers
     def _require_pandas(self) -> None:
         if pd is None:  # pragma: no cover - exercised when pandas missing
             msg = "pandas is required for PandasCondensiteAdapter."
@@ -320,12 +322,12 @@ class PandasCondensiteAdapter(SklearnCondensiteRegressor):
             raise TypeError(msg)
         frame = data
         y_series = self._resolve_target(frame, target)
-        features = self._resolve_features(frame, feature_columns)
-        self._feature_columns = features
         if isinstance(target, str):
             self._target_column = target
         elif y_series.name:
             self._target_column = str(y_series.name)
+        features = self._resolve_features(frame, feature_columns)
+        self._feature_columns = features
         X_matrix = frame[features].to_numpy(dtype=object, copy=False)
         y_values = y_series.to_numpy(dtype=np.float64, copy=False)
         super().fit(X_matrix, y_values)
@@ -360,6 +362,9 @@ class PandasCondensiteAdapter(SklearnCondensiteRegressor):
             if missing:
                 msg = f"Unknown feature columns: {missing}"
                 raise KeyError(msg)
+            if self._target_column is not None and self._target_column in feature_columns:
+                msg = "Target column cannot also be used as a feature."
+                raise ValueError(msg)
             return list(feature_columns)
         if self._feature_columns is not None:
             return list(self._feature_columns)
@@ -394,7 +399,11 @@ class PandasCondensiteAdapter(SklearnCondensiteRegressor):
             columns = [f"y_{idx}" for idx in range(density.shape[1])]
         else:
             grid_arr = np.asarray(grid)
-            columns = grid_arr if grid_arr.ndim == 1 else [f"y_{idx}" for idx in range(density.shape[1])]
+            columns = (
+                grid_arr
+                if grid_arr.ndim == 1
+                else [f"y_{idx}" for idx in range(density.shape[1])]
+            )
         return pd.DataFrame(density, index=data.index, columns=columns)
 
     def predict_interval(
@@ -408,16 +417,17 @@ class PandasCondensiteAdapter(SklearnCondensiteRegressor):
         if not isinstance(data, pd.DataFrame):  # type: ignore[arg-type]
             msg = "data must be a pandas DataFrame."
             raise TypeError(msg)
-        lows, highs = super().predict_interval(self._frame_to_numpy(data), coverage, y_grid=y_grid)
+        lows, highs = super().predict_interval(
+            self._frame_to_numpy(data),
+            coverage,
+            y_grid=y_grid,
+        )
         return pd.DataFrame({"low": lows, "high": highs}, index=data.index)
 
     def _extra_state(self) -> dict[str, Any]:
         state = super()._extra_state()
         state.update(
-            {
-                "feature_columns": self._feature_columns,
-                "target_column": self._target_column,
-            },
+            {"feature_columns": self._feature_columns, "target_column": self._target_column},
         )
         return state
 
@@ -449,3 +459,6 @@ class PandasCondensiteAdapter(SklearnCondensiteRegressor):
             adapter._prediction_grid = np.asarray(grid_payload, dtype=np.float64)
         adapter._load_extra_state(state)
         return adapter
+
+
+__all__ = ("PandasCondensiteAdapter", "SklearnCondensiteRegressor")
