@@ -12,6 +12,7 @@ from numpy.typing import NDArray
 
 SchemaDict = dict[str, Any]
 _FEATURE_DIM = 2
+_MIN_BINS = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +23,9 @@ class DriftThresholds:
     alert: float
 
     def __post_init__(self) -> None:
+        if not np.isfinite(self.warn) or not np.isfinite(self.alert):
+            msg = "warn and alert thresholds must be finite."
+            raise ValueError(msg)
         if self.warn < 0 or self.alert < 0:
             msg = "warn and alert thresholds must be non-negative."
             raise ValueError(msg)
@@ -31,6 +35,9 @@ class DriftThresholds:
 
     def classify(self, value: float) -> str:
         """Return qualitative status for the metric value."""
+        if not np.isfinite(value):
+            msg = "Drift metric value must be finite."
+            raise ValueError(msg)
         if value >= self.alert:
             return "alert"
         if value >= self.warn:
@@ -51,23 +58,58 @@ class MonitoringThresholds:
     pit: DriftThresholds = field(default_factory=lambda: DriftThresholds(0.05, 0.1))
 
 
+def _finite_sample(values: NDArray[np.floating], name: str) -> NDArray[np.float64]:
+    """Return a finite one-dimensional sample or raise an actionable error."""
+    sample = np.asarray(values, dtype=np.float64).reshape(-1)
+    if sample.size == 0:
+        msg = f"{name} must contain values."
+        raise ValueError(msg)
+    if not np.all(np.isfinite(sample)):
+        msg = f"{name} must contain only finite values."
+        raise ValueError(msg)
+    return sample
+
+
+def _validate_bins(bins: int) -> int:
+    """Validate a histogram bin count."""
+    if isinstance(bins, bool) or not isinstance(bins, (int, np.integer)):
+        msg = "bins must be an integer."
+        raise TypeError(msg)
+    bins_int = int(bins)
+    if bins_int < _MIN_BINS:
+        msg = f"bins must be >= {_MIN_BINS}."
+        raise ValueError(msg)
+    return bins_int
+
+
+def _baseline_histogram_edges(baseline: NDArray[np.float64], bins: int) -> NDArray[np.float64]:
+    """Construct reference-fixed PSI bins from baseline empirical quantiles."""
+    quantiles = np.linspace(0.0, 1.0, bins + 1)
+    edges = np.unique(np.quantile(baseline, quantiles))
+    if edges.size == 1:
+        value = float(edges[0])
+        lower = np.nextafter(value, -np.inf)
+        upper = np.nextafter(value, np.inf)
+        return np.array([-np.inf, lower, upper, np.inf], dtype=np.float64)
+    interior = edges[1:-1]
+    return np.concatenate(([-np.inf], interior, [np.inf])).astype(np.float64, copy=False)
+
+
 def population_stability_index(
     baseline: NDArray[np.floating],
     current: NDArray[np.floating],
     *,
     bins: int = 10,
 ) -> float:
-    """Compute PSI between two numeric samples using equal-width bins."""
-    base = np.asarray(baseline, dtype=np.float64).reshape(-1)
-    curr = np.asarray(current, dtype=np.float64).reshape(-1)
-    if base.size == 0 or curr.size == 0:
-        msg = "Both baseline and current samples must contain values."
-        raise ValueError(msg)
-    edges = np.linspace(min(base.min(), curr.min()), max(base.max(), curr.max()), bins + 1)
+    """Compute PSI using bins fixed from the baseline/reference distribution."""
+    base = _finite_sample(baseline, "baseline")
+    curr = _finite_sample(current, "current")
+    bins_int = _validate_bins(bins)
+    edges = _baseline_histogram_edges(base, bins_int)
     base_hist, _ = np.histogram(base, bins=edges)
     curr_hist, _ = np.histogram(curr, bins=edges)
-    base_ratio = np.clip(base_hist / np.clip(base.size, 1, None), 1e-6, None)
-    curr_ratio = np.clip(curr_hist / np.clip(curr.size, 1, None), 1e-6, None)
+    base_ratio = np.clip(base_hist / base.size, 1e-6, None)
+    curr_ratio = np.clip(curr_hist / curr.size, 1e-6, None)
     psi = np.sum((curr_ratio - base_ratio) * np.log(curr_ratio / base_ratio))
     return float(psi)
 
@@ -77,11 +119,8 @@ def ks_drift(
     current: NDArray[np.floating],
 ) -> float:
     """Kolmogorov-Smirnov distance between two samples."""
-    base = np.sort(np.asarray(baseline, dtype=np.float64).reshape(-1))
-    curr = np.sort(np.asarray(current, dtype=np.float64).reshape(-1))
-    if base.size == 0 or curr.size == 0:
-        msg = "Both baseline and current samples must contain values."
-        raise ValueError(msg)
+    base = np.sort(_finite_sample(baseline, "baseline"))
+    curr = np.sort(_finite_sample(current, "current"))
     grid = np.concatenate([base, curr])
     base_cdf = np.searchsorted(base, grid, side="right") / base.size
     curr_cdf = np.searchsorted(curr, grid, side="right") / curr.size
@@ -93,9 +132,13 @@ def pit_histogram(
     *,
     bins: int = 20,
 ) -> dict[str, NDArray[np.float64]]:
-    """Return histogram counts and bin edges for PIT values."""
-    values = np.asarray(pit_values, dtype=np.float64).reshape(-1)
-    counts, edges = np.histogram(values, bins=bins, range=(0.0, 1.0))
+    """Return histogram counts and bin edges for valid PIT values in ``[0, 1]``."""
+    values = _finite_sample(pit_values, "pit_values")
+    bins_int = _validate_bins(bins)
+    if np.any((values < 0.0) | (values > 1.0)):
+        msg = "PIT values must lie in [0, 1]."
+        raise ValueError(msg)
+    counts, edges = np.histogram(values, bins=bins_int, range=(0.0, 1.0))
     return {"counts": counts.astype(np.float64), "edges": edges.astype(np.float64)}
 
 
@@ -120,15 +163,25 @@ def compare_windows(
     *,
     thresholds: MonitoringThresholds | None = None,
 ) -> list[SchemaDict]:
-    """Compare PSI/KS drift for baseline vs current feature windows."""
+    """Compare PSI/KS drift for baseline vs current feature windows.
+
+    Baseline and current windows may contain different numbers of observations; only
+    the feature dimension must agree.
+    """
     thresholds = thresholds or MonitoringThresholds()
     baseline = np.asarray(baseline_features, dtype=np.float64)
     current = np.asarray(current_features, dtype=np.float64)
-    if baseline.shape != current.shape:
-        msg = "Baseline and current feature matrices must share the same shape."
-        raise ValueError(msg)
-    if baseline.ndim != _FEATURE_DIM:
+    if baseline.ndim != _FEATURE_DIM or current.ndim != _FEATURE_DIM:
         msg = "Feature matrices must be 2D (n_samples, n_features)."
+        raise ValueError(msg)
+    if baseline.shape[0] == 0 or current.shape[0] == 0:
+        msg = "Baseline and current feature windows must contain at least one row."
+        raise ValueError(msg)
+    if baseline.shape[1] != current.shape[1]:
+        msg = "Baseline and current feature matrices must have the same number of columns."
+        raise ValueError(msg)
+    if not np.all(np.isfinite(baseline)) or not np.all(np.isfinite(current)):
+        msg = "Feature matrices must contain only finite values."
         raise ValueError(msg)
     if len(feature_names) != baseline.shape[1]:
         msg = "Number of feature names must match the number of columns."
