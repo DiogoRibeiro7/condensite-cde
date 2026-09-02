@@ -1,0 +1,43 @@
+name: Final format pass
+
+on:
+  push:
+    branches:
+      - ci-review-cleanup-final
+    paths:
+      - .github/workflows/final-format-pass.yml
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout cleanup branch
+        uses: actions/checkout@v4
+        with:
+          ref: ci-review-cleanup-final
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Poetry
+        run: pip install poetry==2.2.1
+      - name: Install dependencies
+        run: poetry install --no-interaction
+      - name: Apply formatter and safe fixes
+        run: |
+          poetry run ruff format .
+          poetry run ruff check . --fix || true
+      - name: Commit mechanical cleanup
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          if git diff --cached --quiet; then
+            echo "No formatting changes"
+            exit 0
+          fi
+          git commit -m "style: apply ruff formatting and safe fixes"
+          git push origin HEAD:ci-review-cleanup-final
