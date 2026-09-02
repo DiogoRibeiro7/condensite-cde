@@ -7,7 +7,7 @@ import json
 import math
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, is_dataclass, replace
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from itertools import product
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -82,6 +82,8 @@ def tune_bandwidth_m_aux(  # noqa: PLR0913
         raise ValueError(msg)
     from condensite_torch import CondensiteTorchCDE, CondensiteTorchCDEConfig  # noqa: PLC0415
 
+    X_arr = np.asarray(X)
+    y_arr = np.asarray(y)
     base = base_config or CondensiteTorchCDEConfig()
     metric_literal = cast(Literal["val_crps", "val_nll"], metric)
     metadata = _build_run_metadata(
@@ -90,6 +92,8 @@ def tune_bandwidth_m_aux(  # noqa: PLR0913
         m_aux_values,
         metric,
         random_seed,
+        X_arr,
+        y_arr,
     )
     context = _prepare_run_context(run_root, run_name, resume, metadata)
     best_config: CondensiteTorchCDEConfig | None = None
@@ -100,8 +104,9 @@ def tune_bandwidth_m_aux(  # noqa: PLR0913
             score = record.get(metric)
             if score is None:
                 continue
-            if score < best_score:
-                best_score = score
+            score_value = float(score)
+            if score_value < best_score:
+                best_score = score_value
                 best_config = replace(
                     base,
                     bandwidth=float(record["bandwidth"]),
@@ -121,7 +126,7 @@ def tune_bandwidth_m_aux(  # noqa: PLR0913
             monitor_metric=metric_literal,
         )
         estimator = CondensiteTorchCDE(config=trial_config, random_seed=seed)
-        estimator.fit(X, y)
+        estimator.fit(X_arr, y_arr)
         if not estimator.training_history:
             msg = "Training history is empty; ensure the estimator ran for at least one epoch."
             raise RuntimeError(msg)
@@ -134,8 +139,8 @@ def tune_bandwidth_m_aux(  # noqa: PLR0913
             raise RuntimeError(msg)
         trial_record: dict[str, Any] = {
             "bandwidth": float(bandwidth),
-            "m_aux": float(m_aux),
-            metric: metric_value,
+            "m_aux": int(m_aux),
+            metric: float(metric_value),
             "seed": seed,
         }
         context.record_trial(
@@ -178,7 +183,7 @@ def _prepare_run_context(
             msg = f"Run directory {run_dir} not found."
             raise FileNotFoundError(msg)
     else:
-        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
         folder = run_name or timestamp
         run_dir = root / folder
         if run_dir.exists():
@@ -228,20 +233,40 @@ def _config_fingerprint(
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
+def _array_fingerprint(values: NDArray[Any]) -> str:
+    """Return a stable fingerprint including shape, dtype, and array values."""
+    arr = np.ascontiguousarray(values)
+    digest = hashlib.sha256()
+    digest.update(str(arr.shape).encode("utf-8"))
+    digest.update(str(arr.dtype).encode("utf-8"))
+    if arr.dtype == object:
+        serialized = json.dumps(_clean_value(arr.tolist()), sort_keys=True, separators=(",", ":"))
+        digest.update(serialized.encode("utf-8"))
+    else:
+        digest.update(arr.tobytes(order="C"))
+    return digest.hexdigest()
+
+
 def _build_run_metadata(
     config: "CondensiteTorchCDEConfig",
     bandwidths: Sequence[float],
     m_aux_values: Sequence[int],
     metric: str,
     random_seed: int,
+    X: NDArray[Any],
+    y: NDArray[Any],
 ) -> dict[str, Any]:
     return {
-        "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "bandwidths": [float(bw) for bw in bandwidths],
         "m_aux_values": [int(val) for val in m_aux_values],
         "metric": metric,
         "random_seed": int(random_seed),
         "base_config": _clean_value(asdict(config)),
+        "data_fingerprint": {
+            "X": _array_fingerprint(X),
+            "y": _array_fingerprint(y),
+        },
     }
 
 
@@ -265,7 +290,7 @@ def _clean_value(value: Any) -> Any:
 
 def _write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    path.write_text(json.dumps(data, indent=2, allow_nan=False), encoding="utf-8")
 
 
 def _load_json(path: Path, default: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -275,7 +300,14 @@ def _load_json(path: Path, default: list[dict[str, Any]]) -> list[dict[str, Any]
 
 
 def _validate_metadata(existing: dict[str, Any], expected: dict[str, Any]) -> None:
-    fields = ("bandwidths", "m_aux_values", "metric")
+    fields = (
+        "bandwidths",
+        "m_aux_values",
+        "metric",
+        "random_seed",
+        "base_config",
+        "data_fingerprint",
+    )
     for field in fields:
         if existing.get(field) != expected.get(field):
             msg = (
