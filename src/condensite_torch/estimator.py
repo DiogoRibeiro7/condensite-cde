@@ -29,9 +29,9 @@ from torch.utils.data import DataLoader, Dataset, TensorDataset
 
 from condensite_cde.grids import GridMode, make_y_grid
 
+from . import local_grids
 from .aux_sampling import ImportanceSampler, sample_yprime
 from .kernels import KernelSpec, get_kernel_spec
-from . import local_grids
 from .losses import LossSpec, get_loss_spec
 from .metrics import crps_from_cdf, nll_from_pdf
 from .models import ActivationFactory, MLPRegressor, MLPRegressorConfig
@@ -520,9 +520,13 @@ class CondensiteTorchCDE:
                         y_tensor,
                     ),
                 )
-        normalized = torch.cat(outputs, dim=0) if outputs else torch.zeros(
-            (0, y_tensor.shape[0], len(self._bandwidths)),
-            device=self._device,
+        normalized = (
+            torch.cat(outputs, dim=0)
+            if outputs
+            else torch.zeros(
+                (0, y_tensor.shape[0], len(self._bandwidths)),
+                device=self._device,
+            )
         )
         density_heads = normalized.cpu().numpy().astype(np.float64, copy=False)
         combined = self._combine_heads(density_heads, head=head)
@@ -656,9 +660,7 @@ class CondensiteTorchCDE:
             msg = "Quantile probabilities must lie in [0, 1]."
             raise ValueError(msg)
         quantile_scalar = q_arr.size == 1 and np.ndim(q) == 0
-        grid_arr = (
-            self._validate_y_grid(y_grid) if y_grid is not None else self._default_y_grid()
-        )
+        grid_arr = self._validate_y_grid(y_grid) if y_grid is not None else self._default_y_grid()
         cdf = self.predict_cdf(X, grid_arr, head=head)
         quantiles = self._quantiles_from_cdf(cdf, grid_arr, q_arr)
         if quantile_scalar:
@@ -698,9 +700,7 @@ class CondensiteTorchCDE:
         if side_norm not in {"right", "left"}:
             msg = f"side must be 'right' or 'left', got {side!r}"
             raise ValueError(msg)
-        grid_arr = (
-            self._validate_y_grid(y_grid) if y_grid is not None else self._default_y_grid()
-        )
+        grid_arr = self._validate_y_grid(y_grid) if y_grid is not None else self._default_y_grid()
         cdf = self.predict_cdf(X, grid_arr, head=head)
         thresholds = self._broadcast_to_samples(threshold, cdf.shape[0], "threshold")
         tail = np.empty(cdf.shape[0], dtype=np.float64)
@@ -732,9 +732,7 @@ class CondensiteTorchCDE:
         if side_norm not in {"right", "left"}:
             msg = f"side must be 'right' or 'left', got {side!r}"
             raise ValueError(msg)
-        grid_arr = (
-            self._validate_y_grid(y_grid) if y_grid is not None else self._default_y_grid()
-        )
+        grid_arr = self._validate_y_grid(y_grid) if y_grid is not None else self._default_y_grid()
         pdf = self.predict_density(X, grid_arr, head=head)
         cdf = self._cdf_from_pdf(pdf, grid_arr)
         quantiles = self._quantiles_from_cdf(
@@ -1276,9 +1274,13 @@ class CondensiteTorchCDE:
                     y_tensor[start:end],
                 ),
             )
-        raw = torch.cat(raw_chunks, dim=1) if raw_chunks else torch.zeros(
-            (x_batch.shape[0], 0, len(self._bandwidths)),
-            device=self._device,
+        raw = (
+            torch.cat(raw_chunks, dim=1)
+            if raw_chunks
+            else torch.zeros(
+                (x_batch.shape[0], 0, len(self._bandwidths)),
+                device=self._device,
+            )
         )
         return self._normalize_pdf_heads(raw, y_tensor)
 
@@ -1347,10 +1349,7 @@ class CondensiteTorchCDE:
         quantiles = np.empty((cdf.shape[0], probs.size), dtype=np.float64)
         for col, prob in enumerate(probs):
             quantiles[:, col] = np.array(
-                [
-                    np.interp(prob, row, y_grid, left=y_grid[0], right=y_grid[-1])
-                    for row in cdf
-                ],
+                [np.interp(prob, row, y_grid, left=y_grid[0], right=y_grid[-1]) for row in cdf],
                 dtype=np.float64,
             )
         return quantiles

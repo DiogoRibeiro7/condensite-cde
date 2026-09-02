@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 CALIBRATION_REPORT_SCHEMA_VERSION = "1.0"
 BENCHMARK_REPORT_SCHEMA_VERSION = "1.0"
@@ -39,8 +40,7 @@ def build_calibration_report(
 
     counts = [_finite_float(value, name="PIT histogram count") for value in pit_histogram["counts"]]
     bin_edges = [
-        _finite_float(value, name="PIT histogram bin edge")
-        for value in pit_histogram["bin_edges"]
+        _finite_float(value, name="PIT histogram bin edge") for value in pit_histogram["bin_edges"]
     ]
     if len(bin_edges) != len(counts) + 1:
         msg = "bin_edges must be exactly one element longer than counts."

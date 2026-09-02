@@ -220,7 +220,7 @@ def _prepare_run_context(
 
 
 def _config_fingerprint(
-    config: "CondensiteTorchCDEConfig",
+    config: CondensiteTorchCDEConfig,
     bandwidth: float,
     m_aux: int,
 ) -> str:
@@ -248,7 +248,7 @@ def _array_fingerprint(values: NDArray[Any]) -> str:
 
 
 def _build_run_metadata(
-    config: "CondensiteTorchCDEConfig",
+    config: CondensiteTorchCDEConfig,
     bandwidths: Sequence[float],
     m_aux_values: Sequence[int],
     metric: str,

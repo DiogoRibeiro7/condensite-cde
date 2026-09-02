@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import copy
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Callable
 
 import numpy as np
 from numpy.typing import NDArray

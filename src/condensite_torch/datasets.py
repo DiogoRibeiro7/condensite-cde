@@ -119,7 +119,9 @@ def _load_delimited(
             raw_columns[name].append(row.get(name, "") or "")
 
     converted_columns = [_infer_column(raw_columns[name]) for name in remaining_names]
-    feature_rows = list(zip(*converted_columns, strict=True)) if converted_columns else [()] * len(rows)
+    feature_rows = (
+        list(zip(*converted_columns, strict=True)) if converted_columns else [()] * len(rows)
+    )
     X_arr = np.asarray(feature_rows, dtype=object)
     y_arr = np.asarray(y_values, dtype=np.float64) if target_column is not None else None
     return X_arr, y_arr, remaining_names

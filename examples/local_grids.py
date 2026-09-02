@@ -42,8 +42,7 @@ def main() -> None:
     print("Local grid pdf shape:", pdf_local.shape)
     for idx in range(test_X.shape[0]):
         print(
-            f"Row {idx}: local grid min={local_grids[idx, 0]:.3f}, "
-            f"max={local_grids[idx, -1]:.3f}",
+            f"Row {idx}: local grid min={local_grids[idx, 0]:.3f}, max={local_grids[idx, -1]:.3f}",
         )
 
 

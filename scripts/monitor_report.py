@@ -80,7 +80,7 @@ def main() -> None:
         raise ValueError(msg)
     baseline_targets = np.asarray(baseline[1], dtype=np.float64)
     current_targets = np.asarray(current[1], dtype=np.float64)
-    grid = estimator._default_y_grid()  # noqa: SLF001
+    grid = estimator._default_y_grid()
     cdf_base = estimator.predict_cdf(baseline_features, grid)
     cdf_curr = estimator.predict_cdf(current_features, grid)
     pit_base = _pit_values_for_dataset(baseline_targets, grid, cdf_base)

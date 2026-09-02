@@ -27,7 +27,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     fit_parser = subparsers.add_parser("fit", help="Train a model on a tabular dataset.")
     fit_parser.add_argument("--train", required=True, help="Training dataset path.")
     fit_parser.add_argument("--target", required=True, help="Target column name.")
-    fit_parser.add_argument("--output-model", required=True, help="Directory for the trained model.")
+    fit_parser.add_argument(
+        "--output-model", required=True, help="Directory for the trained model."
+    )
     fit_parser.add_argument("--format", default="auto", choices=_FORMAT_CHOICES)
     fit_parser.add_argument("--epochs", type=int, default=6)
     fit_parser.add_argument("--m-aux", type=int, default=32)
@@ -137,7 +139,9 @@ def _cmd_predict(args: argparse.Namespace) -> int:
     X_cast = cast(NDArray[np.floating], X)
     quantiles = estimator.predict_quantile(X_cast, np.asarray(probs, dtype=np.float64))
     coverage: float | None = args.interval_coverage
-    intervals = None if coverage is None else estimator.predict_interval(X_cast, coverage=float(coverage))
+    intervals = (
+        None if coverage is None else estimator.predict_interval(X_cast, coverage=float(coverage))
+    )
     rows = []
     for idx, row in enumerate(quantiles):
         record: dict[str, float] = {"row": float(idx)}

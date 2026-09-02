@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import copy
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -43,7 +44,9 @@ class _AdapterBase:
         self.grid_mode: GridMode = mode  # type: ignore[assignment]
         self.random_seed = int(random_seed)
         if estimator is None:
-            self.config = copy.deepcopy(config) if config is not None else CondensiteTorchCDEConfig()
+            self.config = (
+                copy.deepcopy(config) if config is not None else CondensiteTorchCDEConfig()
+            )
             self._estimator = CondensiteTorchCDE(
                 config=self.config,
                 random_seed=self.random_seed,
@@ -113,7 +116,9 @@ class _AdapterBase:
     ) -> tuple[CondensiteTorchCDE, dict[str, Any]]:
         base = Path(path)
         state = json.loads((base / cls._STATE_FILENAME).read_text(encoding="utf-8"))
-        estimator = CondensiteTorchCDE.load(base / cls._ESTIMATOR_DIRNAME, map_location=map_location)
+        estimator = CondensiteTorchCDE.load(
+            base / cls._ESTIMATOR_DIRNAME, map_location=map_location
+        )
         return estimator, state
 
 
@@ -303,7 +308,7 @@ class PandasCondensiteAdapter(SklearnCondensiteRegressor):
             msg = "pandas is required for PandasCondensiteAdapter."
             raise ImportError(msg)
 
-    def _frame_to_numpy(self, frame: "pd.DataFrame") -> NDArray[np.object_]:
+    def _frame_to_numpy(self, frame: pd.DataFrame) -> NDArray[np.object_]:
         if self._feature_columns is None:
             msg = "Fit the adapter before calling predict.*"
             raise RuntimeError(msg)
@@ -312,7 +317,7 @@ class PandasCondensiteAdapter(SklearnCondensiteRegressor):
     def fit(
         self,
         data: Any,
-        target: str | "pd.Series" | NDArray[np.floating] | None = None,
+        target: str | pd.Series | NDArray[np.floating] | None = None,
         *,
         feature_columns: Sequence[str] | None = None,
     ) -> PandasCondensiteAdapter:
@@ -335,9 +340,9 @@ class PandasCondensiteAdapter(SklearnCondensiteRegressor):
 
     def _resolve_target(
         self,
-        frame: "pd.DataFrame",
-        target: str | "pd.Series" | NDArray[np.floating] | None,
-    ) -> "pd.Series":
+        frame: pd.DataFrame,
+        target: str | pd.Series | NDArray[np.floating] | None,
+    ) -> pd.Series:
         if isinstance(target, str):
             if target not in frame.columns:
                 msg = f"Target column {target!r} not in DataFrame."
@@ -354,7 +359,7 @@ class PandasCondensiteAdapter(SklearnCondensiteRegressor):
 
     def _resolve_features(
         self,
-        frame: "pd.DataFrame",
+        frame: pd.DataFrame,
         feature_columns: Sequence[str] | None,
     ) -> list[str]:
         if feature_columns is not None:
@@ -400,9 +405,7 @@ class PandasCondensiteAdapter(SklearnCondensiteRegressor):
         else:
             grid_arr = np.asarray(grid)
             columns = (
-                grid_arr
-                if grid_arr.ndim == 1
-                else [f"y_{idx}" for idx in range(density.shape[1])]
+                grid_arr if grid_arr.ndim == 1 else [f"y_{idx}" for idx in range(density.shape[1])]
             )
         return pd.DataFrame(density, index=data.index, columns=columns)
 

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 from numpy.typing import NDArray
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - avoids circular import at runtime
     from .estimator import CondensiteTorchCDE
@@ -15,7 +15,7 @@ FeatureArray = NDArray[np.floating] | NDArray[np.object_]
 
 
 def make_local_grid(  # noqa: PLR0913
-    estimator: "CondensiteTorchCDE",
+    estimator: CondensiteTorchCDE,
     X: FeatureArray,
     grid_size: int = 64,
     *,
