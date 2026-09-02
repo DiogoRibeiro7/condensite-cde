@@ -1,11 +1,10 @@
 name: Benchmarks
 
 on:
+  push:
+    branches: ["main", "master"]
   pull_request:
-    branches: ["develop"]
-
-permissions:
-  contents: write
+    branches: ["main", "master"]
 
 jobs:
   quick-benchmark:
@@ -13,29 +12,22 @@ jobs:
     env:
       PYTHONHASHSEED: "0"
     steps:
-      - name: Checkout review branch
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: condensite-hardening-review
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Apply estimator patch
-        run: python scripts/patch_estimator_review.py
       - name: Install Poetry
         run: pip install poetry==2.2.1
       - name: Install dependencies
         run: poetry install --no-interaction
-      - name: Validate estimator patch
-        run: |
-          poetry run ruff format src/condensite_torch/estimator.py tests/unit/test_reviewer_estimator_fixes.py
-          poetry run ruff check src/condensite_torch/estimator.py tests/unit/test_reviewer_estimator_fixes.py
-          poetry run pytest -q tests/unit/test_reviewer_estimator_fixes.py
-      - name: Commit estimator patch
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/condensite_torch/estimator.py tests/unit/test_reviewer_estimator_fixes.py
-          git commit -m "fix: address estimator review findings"
-          git push origin HEAD:condensite-hardening-review
+      - name: Verify lockfile
+        run: poetry check --lock
+      - name: Run quick benchmark
+        run: poetry run python -m benchmarks.run --quick --output benchmarks/results_ci.json
+      - name: Upload benchmark artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: benchmarks/results_ci.json
