@@ -22,13 +22,16 @@
         "counts": {
           "type": "array",
           "items": {
-            "type": "number"
+            "type": "number",
+            "minimum": 0
           }
         },
         "bin_edges": {
           "type": "array",
           "items": {
-            "type": "number"
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
           }
         }
       }
@@ -37,7 +40,9 @@
       "type": "object",
       "minProperties": 1,
       "additionalProperties": {
-        "type": "number"
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
       }
     }
   }
