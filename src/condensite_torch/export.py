@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import Any
 
 import numpy as np
 import torch
@@ -14,9 +14,6 @@ try:  # pragma: no cover - optional dependency
 except ModuleNotFoundError:  # pragma: no cover
     onnx = None
 
-if TYPE_CHECKING:
-    from onnx import ModelProto  # noqa: F401
-
 
 def export_torchscript(
     module: nn.Module,
@@ -25,13 +22,17 @@ def export_torchscript(
     *,
     strict: bool = True,
 ) -> Path:
-    """Trace `module` with `example_input` and save it as a TorchScript artifact."""
-    module.eval()
+    """Trace ``module`` with ``example_input`` and save a TorchScript artifact."""
+    original_training = module.training
     example = _to_tensor(example_input)
-    traced = torch.jit.trace(module, example, strict=strict)  # type: ignore[no-untyped-call]
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    torch.jit.save(traced, target)  # type: ignore[no-untyped-call]
+    try:
+        module.eval()
+        traced = torch.jit.trace(module, example, strict=strict)  # type: ignore[no-untyped-call]
+        torch.jit.save(traced, target)  # type: ignore[no-untyped-call]
+    finally:
+        module.train(original_training)
     return target
 
 
@@ -43,29 +44,34 @@ def export_onnx(
     opset_version: int = 17,
     dynamic_axes: dict[str, dict[int, str]] | None = None,
 ) -> Path:
-    """Export `module` to ONNX if the dependency is installed, otherwise raise."""
+    """Export ``module`` to ONNX if the optional dependency is installed."""
     if onnx is None:  # pragma: no cover - optional
         msg = "ONNX is not installed; run `pip install onnx` to enable export."
         raise RuntimeError(msg)
-    module.eval()
+    original_training = module.training
     example = _to_tensor(example_input)
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    torch.onnx.export(
-        module,
-        (example,),
-        target.as_posix(),
-        export_params=True,
-        opset_version=opset_version,
-        do_constant_folding=True,
-        input_names=["input"],
-        output_names=["output"],
-        dynamic_axes=dynamic_axes,
-    )
+    try:
+        module.eval()
+        torch.onnx.export(
+            module,
+            (example,),
+            target.as_posix(),
+            export_params=True,
+            opset_version=opset_version,
+            do_constant_folding=True,
+            input_names=["input"],
+            output_names=["output"],
+            dynamic_axes=dynamic_axes,
+        )
+    finally:
+        module.train(original_training)
     return target
 
 
 def _to_tensor(example_input: Any) -> torch.Tensor:
+    """Convert array-like export input to a float32 tensor."""
     if isinstance(example_input, torch.Tensor):
         return example_input
     array = np.asarray(example_input, dtype=np.float32)
