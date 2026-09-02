@@ -1,0 +1,48 @@
+name: Apply final review fixes
+
+on:
+  push:
+    branches:
+      - ci-review-cleanup-final
+    paths:
+      - scripts/apply_final_review_fixes.py
+      - .github/workflows/apply-final-review-fixes.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: ci-review-cleanup-final
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Poetry
+        run: pip install poetry==2.2.1
+      - name: Install dependencies
+        run: poetry install --no-interaction
+      - name: Apply fixes
+        run: python scripts/apply_final_review_fixes.py
+      - name: Format and lint
+        run: |
+          poetry run ruff format .
+          poetry run ruff check .
+      - name: Reviewer regression tests
+        run: poetry run pytest -q tests/unit/test_reviewer_estimator_fixes.py
+      - name: Remove applicator scaffolding
+        run: |
+          rm scripts/apply_final_review_fixes.py
+          rm .github/workflows/apply-final-review-fixes.yml
+      - name: Commit final fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: resolve final review and lint findings"
+          git push origin HEAD:ci-review-cleanup-final
