@@ -1,4 +1,4 @@
-"""Benchmark suite comparing Condensite against simple baselines."""
+"""Benchmark suite comparing Condensite against probabilistic baselines."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from .models import (
     BenchmarkModel,
     CondensiteBaseline,
     ConditionalGaussianBaseline,
+    MixtureDensityNetworkBaseline,
     QuantileRegressionBaseline,
     TrainingConfig,
 )
@@ -85,14 +86,9 @@ def _build_baselines(input_dim: int, quick: bool) -> dict[str, BenchmarkModel]:
     )
     return {
         "condensite": CondensiteBaseline(config=condensite_config, random_seed=7),
-        "gaussian": ConditionalGaussianBaseline(
-            input_dim=input_dim,
-            training=baseline_training,
-        ),
-        "quantile": QuantileRegressionBaseline(
-            input_dim=input_dim,
-            training=baseline_training,
-        ),
+        "gaussian": ConditionalGaussianBaseline(input_dim=input_dim, training=baseline_training),
+        "quantile": QuantileRegressionBaseline(input_dim=input_dim, training=baseline_training),
+        "mdn": MixtureDensityNetworkBaseline(input_dim=input_dim, training=baseline_training),
     }
 
 
