@@ -2,9 +2,9 @@ name: Benchmarks
 
 on:
   push:
-    branches: ["main", "master"]
+    branches: ["develop", "main", "master"]
   pull_request:
-    branches: ["main", "master"]
+    branches: ["develop", "main", "master"]
 
 jobs:
   quick-benchmark:
@@ -19,9 +19,11 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install Poetry
-        run: pip install poetry
+        run: pip install poetry==2.2.1
       - name: Install dependencies
         run: poetry install --no-interaction
+      - name: Verify lockfile
+        run: poetry check --lock
       - name: Run quick benchmark
         run: poetry run python -m benchmarks.run --quick --output benchmarks/results_ci.json
       - name: Upload benchmark artifact
