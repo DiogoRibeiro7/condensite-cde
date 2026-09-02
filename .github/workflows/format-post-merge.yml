@@ -1,0 +1,51 @@
+name: Format post-merge cleanup
+
+on:
+  push:
+    branches:
+      - post-merge-review-cleanup
+    paths:
+      - .github/workflows/format-post-merge.yml
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout cleanup branch
+        uses: actions/checkout@v4
+        with:
+          ref: post-merge-review-cleanup
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Poetry
+        run: pip install poetry==2.2.1
+      - name: Install dependencies
+        run: poetry install --no-interaction
+      - name: Apply formatter and safe lint fixes
+        run: |
+          poetry run ruff format .
+          poetry run ruff check . --fix
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("src/condensite_torch/estimator.py")
+          text = path.read_text(encoding="utf-8")
+          marker = "    def _combine_features(self, X_batch: Tensor, y_prime_chunk: Tensor) -> Tensor:\n"
+          replacement = "    @staticmethod\n    def _combine_features(X_batch: Tensor, y_prime_chunk: Tensor) -> Tensor:\n"
+          if marker in text:
+              text = text.replace(marker, replacement, 1)
+              path.write_text(text, encoding="utf-8")
+          PY
+          poetry run ruff format .
+          poetry run ruff check .
+      - name: Commit formatting cleanup
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "style: normalize merged review changes"
+          git push origin HEAD:post-merge-review-cleanup
