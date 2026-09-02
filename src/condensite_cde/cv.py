@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import copy
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from importlib import import_module
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -48,10 +49,7 @@ class CrossValidationResult:
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serializable representation."""
         return {
-            "metrics": {
-                "mean": self.metrics_mean,
-                "std": self.metrics_std,
-            },
+            "metrics": {"mean": self.metrics_mean, "std": self.metrics_std},
             "folds": [
                 {
                     "fold": fold.fold,
@@ -67,7 +65,7 @@ class CrossValidationResult:
 
     def to_json(self, path: str | Path | None = None) -> str:
         """Serialize the CV report to JSON and optionally persist it."""
-        payload = json.dumps(self.to_dict(), indent=2)
+        payload = json.dumps(self.to_dict(), indent=2, allow_nan=False)
         if path is not None:
             destination = Path(path)
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -89,7 +87,7 @@ def cross_validate(  # noqa: PLR0913
     json_path: str | Path | None = None,
 ) -> CrossValidationResult:
     """Run k-fold CV with probabilistic metrics."""
-    metric_list = tuple((metrics or _DEFAULT_METRICS))
+    metric_list = tuple(metrics or _DEFAULT_METRICS)
     if not metric_list:
         msg = "Provide at least one metric."
         raise ValueError(msg)
@@ -98,21 +96,29 @@ def cross_validate(  # noqa: PLR0913
     if invalid:
         msg = f"Unsupported metrics: {sorted(invalid)}. Valid: {_DEFAULT_METRICS}"
         raise ValueError(msg)
+    if "coverage" in metric_set and (not np.isfinite(coverage) or not 0.0 < coverage < 1.0):
+        msg = "coverage must be in the open interval (0, 1)."
+        raise ValueError(msg)
     if cv < 2:
         msg = "cv must be at least 2."
         raise ValueError(msg)
+
     X_arr = np.asarray(X, dtype=object)
     y_arr = np.asarray(y, dtype=np.float64).reshape(-1)
     n_samples = X_arr.shape[0]
     if y_arr.shape[0] != n_samples:
         msg = "X and y must contain the same number of rows."
         raise ValueError(msg)
+    if not np.all(np.isfinite(y_arr)):
+        msg = "y must contain only finite values."
+        raise ValueError(msg)
     if cv > n_samples:
         msg = "cv cannot exceed the number of samples."
         raise ValueError(msg)
     if groups is not None and stratify_y:
-        msg = "grouped CV and stratified_y cannot be combined."
+        msg = "grouped CV and stratify_y cannot be combined."
         raise ValueError(msg)
+
     group_arr = np.asarray(groups, dtype=object).reshape(-1) if groups is not None else None
     if group_arr is not None and group_arr.shape[0] != n_samples:
         msg = "groups array must match the number of samples."
@@ -120,16 +126,13 @@ def cross_validate(  # noqa: PLR0913
 
     rng = np.random.default_rng(seed)
     stratify_targets = y_arr if stratify_y else None
-    fold_indices = _build_folds(
-        n_samples,
-        cv,
-        rng,
-        group_arr,
-        stratify_targets,
-    )
+    fold_indices = _build_folds(n_samples, cv, rng, group_arr, stratify_targets)
+    if len(fold_indices) != cv or any(indices.size == 0 for indices in fold_indices):
+        msg = "Cross-validation produced an empty validation fold."
+        raise RuntimeError(msg)
+
     base_config = _resolve_config(model)
     fold_summaries: list[FoldMetrics] = []
-
     for fold_idx, val_idx in enumerate(fold_indices):
         train_mask = np.ones(n_samples, dtype=bool)
         train_mask[val_idx] = False
@@ -140,7 +143,7 @@ def cross_validate(  # noqa: PLR0913
             random_seed=int(fold_seed),
         )
         estimator.fit(X_arr[train_idx], y_arr[train_idx])
-        grid = estimator._default_y_grid()  # noqa: SLF001 - stable internal helper
+        grid = estimator._default_y_grid()  # noqa: SLF001
         pdf = estimator.predict_density(X_arr[val_idx], grid)
         cdf = estimator._cdf_from_pdf(pdf, grid)  # noqa: SLF001
         fold_metrics = _compute_metrics(
@@ -205,18 +208,13 @@ def _compute_metrics(
     if "crps" in metrics:
         results["crps"] = crps_from_cdf(y_val, grid, cdf)
     if "coverage" in metrics:
+        if not np.isfinite(coverage) or not 0.0 < coverage < 1.0:
+            msg = "coverage must be in the open interval (0, 1)."
+            raise ValueError(msg)
         tail_mass = (1.0 - float(coverage)) / 2.0
-        probs = np.array(
-            [max(tail_mass, 0.0), min(1.0 - tail_mass, 1.0)],
-            dtype=np.float64,
-        )
-        quantiles = estimator._quantiles_from_cdf(  # noqa: SLF001
-            cdf,
-            grid,
-            probs,
-        )
-        coverage_value = coverage_rate(y_val, quantiles[:, 0], quantiles[:, 1])
-        results["coverage"] = coverage_value
+        probs = np.array([tail_mass, 1.0 - tail_mass], dtype=np.float64)
+        quantiles = estimator._quantiles_from_cdf(cdf, grid, probs)  # noqa: SLF001
+        results["coverage"] = coverage_rate(y_val, quantiles[:, 0], quantiles[:, 1])
     return results
 
 
@@ -231,7 +229,7 @@ def _build_folds(
         return _make_group_folds(groups, cv, rng)
     if stratify_targets is not None:
         stratified = _make_stratified_folds(stratify_targets, cv, rng)
-        if stratified is not None:
+        if stratified is not None and all(indices.size > 0 for indices in stratified):
             return stratified
     return _make_random_folds(n_samples, cv, rng)
 
@@ -287,21 +285,22 @@ def _make_stratified_folds(
         return None
     bin_count = min(max(cv * 2, 2), min(unique.size, 20))
     quantiles = np.linspace(0.0, 1.0, bin_count + 1)
-    edges = np.quantile(targets, quantiles)
-    edges = np.unique(edges)
+    edges = np.unique(np.quantile(targets, quantiles))
     if edges.size <= 1:
         return None
     bins = np.digitize(targets, edges[1:-1], right=False)
     folds: list[list[int]] = [[] for _ in range(cv)]
-    max_bin = int(np.max(bins))
-    for bin_id in range(max_bin + 1):
+    for bin_id in range(int(np.max(bins)) + 1):
         bin_indices = np.nonzero(bins == bin_id)[0]
         if bin_indices.size == 0:
             continue
         rng.shuffle(bin_indices)
         for offset, idx in enumerate(bin_indices):
             folds[offset % cv].append(int(idx))
-    return [np.asarray(sorted(indices), dtype=np.int64) for indices in folds]
+    result = [np.asarray(sorted(indices), dtype=np.int64) for indices in folds]
+    if any(indices.size == 0 for indices in result):
+        return None
+    return result
 
 
 def _resolve_config(
