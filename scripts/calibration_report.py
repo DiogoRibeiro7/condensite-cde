@@ -11,9 +11,10 @@ try:
     import torch  # noqa: F401
 except OSError as exc:  # pragma: no cover - environment dependent
     print(json.dumps({"error": f"Torch unavailable: {exc}"}))
-    raise SystemExit(0)
+    raise SystemExit(0) from exc
 
 from condensite_cde import make_y_grid
+from condensite_cde.reports import build_calibration_report
 from condensite_torch import CondensiteTorchCDE, CondensiteTorchCDEConfig
 from condensite_torch.diagnostics import coverage_rate, pit_values
 
@@ -26,12 +27,11 @@ def make_dataset(n_samples: int = 400) -> tuple[np.ndarray, np.ndarray]:
     return X, y
 
 
-def main() -> None:
+def _fit_model() -> tuple[CondensiteTorchCDE, np.ndarray, np.ndarray, np.ndarray]:
     X, y = make_dataset()
     split = int(0.75 * len(X))
     X_train, X_val = X[:split], X[split:]
     y_train, y_val = y[:split], y[split:]
-
     config = CondensiteTorchCDEConfig(
         hidden_sizes=(48, 48),
         m_aux=64,
@@ -43,12 +43,18 @@ def main() -> None:
         val_fraction=0.0,
     )
     estimator = CondensiteTorchCDE(config=config, random_seed=13).fit(X_train, y_train)
-    grid = make_y_grid(y_train, grid_size=96, mode="quantile")
+    return estimator, X_val, y_val, y_train
 
+
+def _build_payload(
+    estimator: CondensiteTorchCDE,
+    X_val: np.ndarray,
+    y_val: np.ndarray,
+    grid: np.ndarray,
+) -> dict[str, object]:
     cdf = estimator.predict_cdf(X_val, grid)
     pit = pit_values(y_val, grid, cdf)
     hist_counts, hist_edges = np.histogram(pit, bins=20, range=(0.0, 1.0))
-
     levels = [0.5, 0.8, 0.9, 0.95]
     coverage_results: dict[str, float] = {}
     for level in levels:
@@ -57,13 +63,26 @@ def main() -> None:
         cov = coverage_rate(y_val, quantiles[:, 0], quantiles[:, 1])
         coverage_results[f"p{int(level * 100):02d}"] = cov
 
-    payload = {
-        "pit": {
-            "counts": hist_counts.tolist(),
-            "bin_edges": hist_edges.tolist(),
-        },
-        "coverage": coverage_results,
+    histogram = {
+        "counts": hist_counts.tolist(),
+        "bin_edges": hist_edges.tolist(),
     }
+    metadata = {
+        "levels": levels,
+        "validation_rows": int(X_val.shape[0]),
+        "grid_points": int(grid.size),
+    }
+    return build_calibration_report(
+        pit_histogram=histogram,
+        coverage=coverage_results,
+        metadata=metadata,
+    )
+
+
+def main() -> None:
+    estimator, X_val, y_val, y_train = _fit_model()
+    grid = make_y_grid(y_train, grid_size=96, mode="quantile")
+    payload = _build_payload(estimator, X_val, y_val, grid)
 
     target = Path("reports") / "calibration.json"
     target.parent.mkdir(parents=True, exist_ok=True)

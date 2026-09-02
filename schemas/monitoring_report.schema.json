@@ -1,0 +1,103 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MonitoringReport",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "feature_drift", "pit"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "generated_at": {
+      "type": "string"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "feature_drift": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["feature", "psi", "ks"],
+        "properties": {
+          "feature": {
+            "type": "string"
+          },
+          "psi": {
+            "$ref": "#/definitions/metricPayload"
+          },
+          "ks": {
+            "$ref": "#/definitions/metricPayload"
+          }
+        }
+      }
+    },
+    "pit": {
+      "type": "object",
+      "required": ["histogram", "drift"],
+      "properties": {
+        "histogram": {
+          "type": "object",
+          "required": ["baseline", "current"],
+          "properties": {
+            "baseline": {
+              "$ref": "#/definitions/histogramPayload"
+            },
+            "current": {
+              "$ref": "#/definitions/histogramPayload"
+            }
+          }
+        },
+        "drift": {
+          "$ref": "#/definitions/metricPayload"
+        }
+      }
+    }
+  },
+  "definitions": {
+    "metricPayload": {
+      "type": "object",
+      "required": ["value", "status", "thresholds"],
+      "properties": {
+        "value": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["ok", "warn", "alert"]
+        },
+        "thresholds": {
+          "type": "object",
+          "required": ["warn", "alert"],
+          "properties": {
+            "warn": {
+              "type": "number"
+            },
+            "alert": {
+              "type": "number"
+            }
+          }
+        }
+      }
+    },
+    "histogramPayload": {
+      "type": "object",
+      "required": ["counts", "bin_edges"],
+      "properties": {
+        "counts": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "bin_edges": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        }
+      }
+    }
+  }
+}

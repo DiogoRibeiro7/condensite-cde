@@ -23,7 +23,7 @@ def _make_dataset(n_samples: int = 256) -> tuple[np.ndarray, np.ndarray, np.ndar
 
 
 def test_fit_predict_density_produces_valid_pdf() -> None:
-    X_train, y_train, X_test, y_test = _make_dataset()
+    X_train, y_train, X_test, _y_test = _make_dataset()
     grid = np.linspace(y_train.min() - 0.5, y_train.max() + 0.5, 64)
     config = CondensiteTorchCDEConfig(
         hidden_sizes=(32, 32),

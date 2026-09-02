@@ -21,7 +21,8 @@ def test_coverage_rate_matches_known_interval() -> None:
     q_lo = np.full_like(y_true, -1.0)
     q_hi = np.full_like(y_true, 1.0)
     cov = coverage_rate(y_true, q_lo, q_hi)
-    assert 0.6 < cov < 0.75
+    lower, upper = 0.6, 0.75
+    assert lower < cov < upper
 
 
 def test_coverage_alias_matches_rate() -> None:

@@ -23,6 +23,9 @@ def make_y_grid(
     if data.size == 0:
         msg = "y_train must contain at least one element."
         raise ValueError(msg)
+    if not np.all(np.isfinite(data)):
+        msg = "y_train must contain only finite values."
+        raise ValueError(msg)
     if grid_size < MIN_GRID_SIZE:
         msg = f"grid_size must be >= {MIN_GRID_SIZE}."
         raise ValueError(msg)
@@ -37,7 +40,7 @@ def make_y_grid(
     mode_lower = mode.lower()
     if mode_lower == "quantile":
         quantiles = np.linspace(0.0, 1.0, grid_size)
-        grid = np.quantile(data, quantiles, method="linear")  # NumPy>=1.22
+        grid = np.quantile(data, quantiles, method="linear")
     elif mode_lower == "linear":
         grid = np.linspace(float(data.min()), float(data.max()), grid_size)
     else:

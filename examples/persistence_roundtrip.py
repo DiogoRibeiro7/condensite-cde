@@ -42,9 +42,10 @@ def main() -> None:
     restored = CondensiteTorchCDE.load(save_dir)
     restored_metrics = restored.evaluate(X_val, y_val, y_grid=grid)
     print("Restored metrics:", restored_metrics)
-    assert all(
-        abs(metrics[key] - restored_metrics[key]) < 1e-5 for key in metrics
-    ), "Round-trip should preserve predictions."
+    tolerance = 1e-5
+    assert all(abs(metrics[key] - restored_metrics[key]) < tolerance for key in metrics), (
+        "Round-trip should preserve predictions."
+    )
 
 
 if __name__ == "__main__":

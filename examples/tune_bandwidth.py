@@ -48,6 +48,7 @@ def main() -> None:
         f"Best configuration: bandwidth={best.bandwidth:.3f}, "
         f"m_aux={best.m_aux}, {result.metric_name}={result.best_metric:.4f}",
     )
+    print(f"Run directory: {result.run_dir}")
     print("All trials:")
     for trial in result.history:
         print(

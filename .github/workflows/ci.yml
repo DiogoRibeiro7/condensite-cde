@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: ["main", "master"]
+    branches: ["develop", "main", "master"]
   pull_request:
-    branches: ["main", "master"]
+    branches: ["develop", "main", "master"]
 
 jobs:
   quality:
@@ -19,9 +19,11 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install Poetry
-        run: pip install poetry
+        run: pip install poetry==2.2.1
       - name: Install dependencies
         run: poetry install --no-interaction
+      - name: Verify lockfile
+        run: poetry check --lock
       - name: Format (ruff)
         run: poetry run ruff format --check .
       - name: Lint
@@ -30,3 +32,70 @@ jobs:
         run: poetry run mypy src
       - name: Tests
         run: poetry run pytest -q -m "unit or integration or regression"
+      - name: Monitoring smoke test
+        run: |
+          poetry run python - <<'PY'
+          import csv
+          import json
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          import numpy as np
+
+          from condensite_torch import CondensiteTorchCDE, CondensiteTorchCDEConfig
+
+          tmp = Path("monitoring_smoke")
+          tmp.mkdir(exist_ok=True)
+          rng = np.random.default_rng(0)
+          X = rng.normal(size=(200, 2))
+          noise = (0.1 + 0.2 * np.abs(X[:, 0])) * rng.normal(size=X.shape[0])
+          y = 0.5 * np.sin(X[:, 0]) - 0.3 * X[:, 1] + noise
+          split = int(0.6 * X.shape[0])
+          X_train, y_train = X[:split], y[:split]
+          X_base, y_base = X[split:split + 40], y[split:split + 40]
+          X_curr, y_curr = X[split + 40:], y[split + 40:]
+
+          config = CondensiteTorchCDEConfig(
+              hidden_sizes=(16, 16),
+              epochs=3,
+              patience=2,
+              m_aux=16,
+              sampler="sobol",
+          )
+          estimator = CondensiteTorchCDE(config=config, random_seed=7).fit(X_train, y_train)
+          model_dir = tmp / "model"
+          estimator.save(model_dir)
+
+          def write_csv(path: Path, X_arr: np.ndarray, y_arr: np.ndarray) -> None:
+              with path.open("w", newline="", encoding="utf-8") as handle:
+                  writer = csv.writer(handle)
+                  writer.writerow(["x0", "x1", "target"])
+                  for row, target in zip(X_arr, y_arr, strict=True):
+                      writer.writerow([float(row[0]), float(row[1]), float(target)])
+
+          baseline_path = tmp / "baseline.csv"
+          current_path = tmp / "current.csv"
+          write_csv(baseline_path, X_base, y_base)
+          write_csv(current_path, X_curr, y_curr)
+          report_path = tmp / "report.json"
+
+          cmd = [
+              sys.executable,
+              "scripts/monitor_report.py",
+              "--model",
+              str(model_dir),
+              "--baseline",
+              str(baseline_path),
+              "--current",
+              str(current_path),
+              "--target",
+              "target",
+              "--output",
+              str(report_path),
+          ]
+          subprocess.run(cmd, check=True, text=True)
+          payload = json.loads(report_path.read_text(encoding="utf-8"))
+          if payload.get("schema_version") != "1.0":
+              raise SystemExit("Monitoring payload missing schema_version")
+          PY

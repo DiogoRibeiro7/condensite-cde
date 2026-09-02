@@ -60,28 +60,69 @@ Use `examples/basic_tabular.py` for a fuller walkthrough including validation me
 - **Multi-bandwidth heads**: Set `bandwidths=[0.06, 0.12, 0.2]` to train one head per bandwidth; use `bandwidth_strategy="mean"` (or pass `head="mean"`, `head="best"`, or a head index when calling `predict_*`) to select how densities are combined at inference. `head="best"` reuses the validation metric (CRPS/NLL) to pick the sharpest head at inference.
 - **Adaptive bandwidths**: Switch on `adaptive_bandwidth="x"` to predict positive per-sample bandwidth scalings that modulate smoothing automatically while keeping compatibility with fixed-bandwidth training.
 - **Normalization penalty**: Tune `normalization_lambda>0` to add a differentiable squared-integral penalty so the raw heads stay close to valid PDFs even before post-hoc renormalization.
+- **Pluggable kernels/losses**: Choose `kernel in {"gaussian","epanechnikov"}` plus `loss in {"mse","mae"}` (e.g., `CondensiteTorchCDEConfig(kernel="epanechnikov", loss="mae")`) to explore alternate smoothing/optimization objectives without forking the trainer—see `examples/custom_kernel_loss.py`.
+- **Reproducible mode + model cards**: Set `CondensiteTorchCDEConfig(reproducible=True)` to seed Python/NumPy/Torch, pin deterministic kernels, and emit a model card (`estimator.model_card()`) capturing config hashes, schema stats, runtime versions, and training/early-stopping summaries. The same metadata is persisted in `metadata.json` when you call `save()`.
 - **Evaluation helper**: Call `estimator.evaluate(X, y)` to obtain CRPS/NLL/integral-error diagnostics without writing boilerplate loops; `examples/persistence_roundtrip.py` shows how to pair it with save/load.
 - **Quantiles & tail risk**: `predict_quantile`, `predict_interval`, `predict_tail_prob`, and `expected_shortfall` expose decision metrics; see `examples/quantiles_and_intervals.py` and `examples/tail_risk.py`.
+- **Input validation**: Pass `CondensiteTorchCDEConfig(input_schema=SchemaConstraints(...))` to enforce dtype/missingness/cardinality/target bounds up front—the estimator calls `validate_inputs` automatically during `fit`/`predict` so bad batches fail fast with actionable errors.
+- **Fast inference**: Control memory/throughput by setting `inference_batch_size` (rows) and `inference_grid_chunk_size` (grid points) so `predict_density` streams large evaluations without blowing up RAM. Run `scripts/inference_benchmark.py` to see the impact on a medium dataset.
 - **Permutation importance**: `condensite_torch.permutation_importance` perturbs features and recomputes CRPS/NLL to quantify their impact; `examples/permutation_importance.py` prints mean/std importances for a toy dataset.
 - **What-if analysis**: `condensite_torch.what_if` mutates selected features and reports how quantiles/tails/pdf/cdf shift; `examples/what_if.py` shows a minimal counterfactual report.
+- **Tabular preprocessing**: Mixed numeric/categorical inputs are handled automatically via `TabularPreprocessorConfig` (median/mode imputation, optional missing indicators, one-hot with deterministic ordering). See `examples/tabular_preprocessing.py` or configure explicitly:
+
+```python
+from condensite_torch import CondensiteTorchCDEConfig, TabularPreprocessorConfig
+
+config = CondensiteTorchCDEConfig(
+    preprocessor=TabularPreprocessorConfig(
+        add_missing_indicator=True,
+        handle_unknown="use_unknown",
+    ),
+)
+```
 - **Sampling benchmark**: `scripts/aux_sampling_benchmark.py` trains a small model with `sampler in {iid, stratified, lhs, sobol, importance}` and prints JSON means/std-devs of CRPS/NLL so you can quantify the trade-offs.
+- **Benchmark suite**: `python -m benchmarks.run` trains Condensite alongside Gaussian + quantile baselines on heteroscedastic/multimodal datasets and writes JSON metrics (default `benchmarks/results.json`) that adhere to `schemas/benchmark_report.schema.json`. Pass `--quick` for a CI-friendly downsampled run or `--output` to control the artifact path; the quick mode is what CI executes.
 - **Early stopping**: Use `val_fraction>0` or pass `(X_val, y_val)` along with `patience` / `monitor_metric` to enable validation-driven checkpoints; `examples/early_stopping.py` shows how to inspect the recorded metrics and restored epoch.
-- **Calibration diagnostics**: `scripts/calibration_report.py` emits PIT histograms and coverage stats so you can monitor probabilistic calibration over time.
+- **Calibration diagnostics**: `scripts/calibration_report.py` emits PIT histograms and coverage stats conforming to `schemas/calibration_report.schema.json` so dashboards can rely on the `schema_version`.
+- **Monitoring dashboards**: `scripts/monitor_report.py` compares baseline/current windows, applies drift thresholds, and validates the payload against `schemas/monitoring_report.schema.json` (bakes in `schema_version` + histogram layout) before writing JSON.
 - **Split-conformal intervals**: Wrap the estimator with `ConformalCDEWrapper` to obtain finite-sample predictive intervals, choosing `method="quantile"` or `"cdf"` for calibration style; see `examples/conformal_intervals.py`.
 - **AMP & GPU**: Set `amp=True` when training on CUDA devices; automatic casting and gradient scaling are enabled through PyTorch AMP.
+
+## Report Schemas
+
+Automation hooks (dashboards, alerting) can pin to stable report contracts—the JSON files above always include a `schema_version` and the corresponding schema lives under `schemas/*.schema.json`:
+
+| Report        | Generator                               | Schema file                              |
+| ------------- | --------------------------------------- | ---------------------------------------- |
+| Calibration   | `scripts/calibration_report.py`         | `schemas/calibration_report.schema.json` |
+| Monitoring    | `scripts/monitor_report.py`             | `schemas/monitoring_report.schema.json`  |
+| Benchmarks    | `python -m benchmarks.run [--quick]`    | `schemas/benchmark_report.schema.json`   |
+
+Use `jsonschema` (optional dependency) or the built-in schema version check to fail fast when the producer bumps versions:
+
+```bash
+pip install jsonschema
+jsonschema -i reports/calibration.json schemas/calibration_report.schema.json
+```
 
 ## Automated Tuning
 
 ```python
 from condensite_cde.tune import tune_bandwidth_m_aux
 from condensite_torch import CondensiteTorchCDEConfig
+from condensite_torch.validation import SchemaConstraints
 
 result = tune_bandwidth_m_aux(
     X_train,
     y_train,
     bandwidths=[0.08, 0.12, 0.16],
     m_aux_values=[64, 96],
-    base_config=CondensiteTorchCDEConfig(epochs=6, patience=2, val_fraction=0.2),
+    base_config=CondensiteTorchCDEConfig(
+        epochs=6,
+        patience=2,
+        val_fraction=0.2,
+        input_schema=SchemaConstraints(y_min=-1.0, y_max=1.0),
+    ),
     metric="val_crps",
 )
 best_config = result.best_config
@@ -95,6 +136,7 @@ The tuner logs every trial (bandwidth, auxiliary count, validation metric) so yo
 - `estimator.save(path)` writes `model.pt`, `config.json`, `scalers.json`, and metadata (including quantile summaries) into the target directory.
 - `CondensiteTorchCDE.load(path, map_location="cpu")` restores the estimator, scalers, and configuration for immediate inference or continued training.
 - The round-trip is covered by unit tests to guarantee deterministic density predictions after reloads.
+- `estimator.model_card()` reveals the training metadata/config hash/version info captured during fit (and persisted inside `metadata.json`).
 
 ## Examples
 
@@ -111,9 +153,30 @@ poetry run python examples/quantiles_and_intervals.py
 poetry run python examples/tail_risk.py
 poetry run python examples/permutation_importance.py
 poetry run python examples/what_if.py
+poetry run python examples/tabular_preprocessing.py
+poetry run python examples/multi_target.py
+poetry run python examples/distribution_comparison.py
+poetry run python examples/local_grids.py
+poetry run python examples/epistemic_ensemble.py
+poetry run python examples/custom_kernel_loss.py
+poetry run python examples/cross_validation.py
+poetry run python scripts/local_grid_benchmark.py
+poetry run python scripts/inference_benchmark.py --row-batch 64 --grid-chunk 64
+poetry run python -m benchmarks.run --quick
+condensite fit --train data/train.csv --target target --output-model artifacts/model
+condensite predict --model artifacts/model --data data/inference.csv --target target --output preds.csv
+condensite predict --model artifacts/model --data data/inference.csv --target target --output preds_with_intervals.csv --interval-coverage 0.9
+condensite report --model artifacts/model --data data/val.csv --target target --output-json reports/metrics.json
+condensite tune --train data/train.csv --target target --bandwidths 0.05,0.1 --m-aux-values 16,32 --run-root runs --run-name demo-run
+```
+
+## Release process
+
+See `docs/RELEASE.md` for the full checklist (version bump, tagging, and the trusted-publishing workflow that pushes artifacts to PyPI on `v*` tags).
+```bash
 poetry run python scripts/aux_sampling_benchmark.py > benchmark.json
 poetry run python scripts/calibration_report.py
-poetry run python benchmarks/run_all.py
+poetry run python -m benchmarks.run --datasets heteroscedastic,multimodal --output reports/benchmarks.json
 ```
 
 ## Getting Started
@@ -135,3 +198,18 @@ poetry run mypy src
 ## Licensing
 
 This project is licensed under the [MIT License](LICENSE).
+- **Multi-target outputs**: `MultiTargetCondensite` now supports independent, autoregressive, and shared-trunk training so you can reuse a single encoder with per-target heads when `p>1`; `examples/multi_target.py` demonstrates all three modes with correlated targets.
+- **Distribution comparison**: `condensite_torch.distribution_metrics` exposes Wasserstein-1, Kolmogorov–Smirnov, and Jensen–Shannon distances to compare two predicted distributions on the same grid; run `examples/distribution_comparison.py` to see them in action.
+- **Local grids**: `condensite_torch.make_local_grid` builds per-row grids using estimated quantiles so inference focuses on the relevant range; see `examples/local_grids.py`. Defaults (`q_low=0.01`, `q_high=0.99`, `padding=0.1`) work well as a starting point—tighten the quantiles for faster inference on well-behaved targets or loosen them plus more padding for heavy tails.
+- **Ensembles**: `EnsembleCondensite` trains multiple seeds/bootstraps and returns mean/variance for densities/quantiles (see `examples/epistemic_ensemble.py`) to capture epistemic uncertainty.
+- **CLI**: `condensite` exposes `fit`, `predict`, and `report` subcommands so you can train/evaluate from CSV/Parquet without writing Python; see the quickstart commands below. `condensite predict` now accepts `--interval-coverage` to emit predictive interval columns alongside quantiles.
+- **Model export**: `condensite_torch.export_torchscript` and `export_onnx` (optional dependency) trace any `nn.Module` with a sample tensor and save it for deployment; explicit preprocessing/feature concatenation must be handled by the caller.
+- **Monitoring**: `condensite_torch.monitoring` exposes PSI/KS and PIT drift helpers with configurable warn/alert thresholds; `scripts/monitor_report.py` writes a schema-stable JSON payload with per-feature statuses for dashboards.
+- **Hyper-parameter tuning**: `condensite_cde.tune.tune_bandwidth_m_aux` records each grid search under `runs/<timestamp>/` (config, metrics, artifacts) and reuses cached metrics via config hashes, and the CLI offers `condensite tune ... --resume` to continue unfinished sweeps.
+- **Cross-validation**: `condensite_cde.cross_validate` trains fresh folds with probabilistic metrics (NLL/CRPS/coverage) and can emit a JSON summary for dashboards; see `examples/cross_validation.py` for an end-to-end run.
+
+### Local grid best practices
+
+- Run `poetry run python scripts/local_grid_benchmark.py --datasets heteroscedastic,multimodal --grid-size 64` to capture runtime/accuracy deltas between global and local grids on representative datasets; the script writes `reports/local_grid_benchmark.json` with speedups and NLL/CRPS deltas.
+- Start with `q_low=0.01`, `q_high=0.99`, and `padding=0.1` for noisy/heteroscedastic targets. Tighten to `(0.05, 0.95)` without padding for well-behaved unimodal data, or widen to `(0.001, 0.999)` plus padding `>=0.2` when heavy tails or outliers are expected.
+- When calling inference APIs (`predict_density`, `predict_cdf`, `evaluate`), set `use_local_grid=True` and optionally override `grid_size/q_low/q_high/padding` with `local_grid_params`. The estimator now caches the generated grids per dataset window so repeated evaluations avoid recomputing quantiles.

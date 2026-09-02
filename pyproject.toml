@@ -32,11 +32,15 @@ Repository = "https://github.com/diogoribeiro7/condensite-cde"
 Documentation = "https://github.com/diogoribeiro7/condensite-cde#readme"
 Issues = "https://github.com/diogoribeiro7/condensite-cde/issues"
 
+[project.scripts]
+condensite = "condensite_torch.cli:main"
+
 [dependency-groups]
 dev = [
     "pytest (>=9.0.2,<10.0.0)",
     "ruff (>=0.14.10,<0.15.0)",
     "mypy (>=1.19.1,<2.0.0)",
+    "jsonschema (>=4.23.0,<5.0.0)",
 ]
 
 [tool.poetry]

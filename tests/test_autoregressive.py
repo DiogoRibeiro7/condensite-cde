@@ -15,13 +15,14 @@ from condensite_torch.autoregressive import AutoregressiveCondensite
 def _make_multivariate_dataset(n_samples: int = 256) -> tuple[np.ndarray, np.ndarray]:
     rng = np.random.default_rng(4)
     X = rng.normal(size=(n_samples, 2))
-    y1 = 0.5 * np.sin(X[:, 0]) + 0.3 * X[:, 1] + 0.1 * rng.normal(size=n_samples)
-    y2 = y1 + 0.2 * X[:, 0] - 0.1 * X[:, 1] + 0.1 * rng.normal(size=n_samples)
+    base = 0.6 * X[:, 0] + 0.2 * X[:, 1]
+    y1 = base + 0.05 * rng.normal(size=n_samples)
+    y2 = y1 + 0.5 * X[:, 0] - 0.1 * X[:, 1] + 0.02 * rng.normal(size=n_samples)
     Y = np.stack([y1, y2], axis=1)
     return X, Y
 
 
-def test_autoregressive_sampling_is_deterministic_and_correlated() -> None:
+def test_autoregressive_sampling_respects_history(monkeypatch) -> None:
     X, Y = _make_multivariate_dataset()
     config = CondensiteTorchCDEConfig(
         hidden_sizes=(32, 32),
@@ -39,8 +40,19 @@ def test_autoregressive_sampling_is_deterministic_and_correlated() -> None:
     assert samples_a.shape == (X_test.shape[0], 8, 2)
     assert np.allclose(samples_a, samples_b)
     assert not np.allclose(samples_a, samples_c)
-    corr = np.corrcoef(samples_a[:, :, 0].ravel(), samples_a[:, :, 1].ravel())[0, 1]
-    assert corr > 0.3
+
+    original_repeat = AutoregressiveCondensite._repeat_with_history
+
+    def _zero_history(self, X, history):
+        if history.size == 0:
+            return original_repeat(ar_model, X, history)
+        neutral = np.zeros_like(history)
+        return original_repeat(ar_model, X, neutral)
+
+    monkeypatch.setattr(AutoregressiveCondensite, "_repeat_with_history", _zero_history)
+    samples_without_history = ar_model.sample(X_test, n_samples=8, seed=5)
+    monkeypatch.setattr(AutoregressiveCondensite, "_repeat_with_history", original_repeat)
+    assert not np.allclose(samples_a[:, :, 1], samples_without_history[:, :, 1])
 
 
 def test_predict_marginal_quantile_requires_history_for_later_dims() -> None:
@@ -51,5 +63,10 @@ def test_predict_marginal_quantile_requires_history_for_later_dims() -> None:
         ar_model.predict_marginal_quantile(X[:5], dim=1, q=0.5)
     medians_first = ar_model.predict_marginal_quantile(X[:5], dim=0, q=0.5)
     assert medians_first.shape == (5,)
-    quantiles_second = ar_model.predict_marginal_quantile(X[:5], dim=1, q=[0.1, 0.9], y_prefix=Y[:5, :1])
+    quantiles_second = ar_model.predict_marginal_quantile(
+        X[:5],
+        dim=1,
+        q=[0.1, 0.9],
+        y_prefix=Y[:5, :1],
+    )
     assert quantiles_second.shape == (5, 2)

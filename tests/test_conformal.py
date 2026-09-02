@@ -21,7 +21,7 @@ def _make_dataset(n_samples: int = 320) -> tuple[np.ndarray, np.ndarray]:
 
 
 @pytest.mark.parametrize("method", ["quantile", "cdf"])
-def test_conformal_wrapper_reaches_target_coverage(method: str) -> None:
+def test_conformal_wrapper_reaches_target_coverage(method: str) -> None:  # noqa: PLR0914
     X, y = _make_dataset()
     train_end = 180
     cal_end = 260
@@ -46,10 +46,12 @@ def test_conformal_wrapper_reaches_target_coverage(method: str) -> None:
         method=method,
     )
     grid = np.linspace(y_train.min() - 0.5, y_train.max() + 0.5, 96)
-    lower, upper = wrapper.predict_interval(X_test, coverage=0.9, y_grid=grid)
+    target_coverage = 0.9
+    lower, upper = wrapper.predict_interval(X_test, coverage=target_coverage, y_grid=grid)
     assert lower.shape == upper.shape == (X_test.shape[0],)
     covered = ((y_test >= lower) & (y_test <= upper)).mean()
-    assert 0.82 <= covered <= 1.0 + 1e-6
+    lower_bound = 0.82
+    assert lower_bound <= covered <= 1.0 + 1e-6
 
 
 def test_conformal_wrapper_rejects_unknown_method() -> None:

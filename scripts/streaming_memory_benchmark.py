@@ -23,19 +23,27 @@ def _make_dataset(n_samples: int = 2048) -> tuple[np.ndarray, np.ndarray]:
 def _track_feature_rows(stats: dict[str, int]) -> None:
     original = CondensiteTorchCDE._combine_features
 
-    def spy(self: CondensiteTorchCDE, X_batch, y_chunk):
+    def spy(
+        self: CondensiteTorchCDE,
+        X_batch: np.ndarray,
+        y_chunk: np.ndarray,
+    ) -> np.ndarray:
         features = original(self, X_batch, y_chunk)
         stats["max_rows"] = max(stats["max_rows"], features.shape[0])
         return features
 
-    setattr(CondensiteTorchCDE, "_combine_features", spy)
+    CondensiteTorchCDE._combine_features = spy
     try:
         yield
     finally:
-        setattr(CondensiteTorchCDE, "_combine_features", original)
+        CondensiteTorchCDE._combine_features = original
 
 
-def _run_with_config(config: CondensiteTorchCDEConfig, X: np.ndarray, y: np.ndarray) -> dict[str, int]:
+def _run_with_config(
+    config: CondensiteTorchCDEConfig,
+    X: np.ndarray,
+    y: np.ndarray,
+) -> dict[str, int]:
     stats = {"max_rows": 0}
     with _track_feature_rows(stats):
         CondensiteTorchCDE(config=config, random_seed=0).fit(X, y)

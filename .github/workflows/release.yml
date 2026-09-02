@@ -5,6 +5,10 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -17,5 +21,12 @@ jobs:
         run: pip install poetry
       - name: Build package
         run: poetry build
-      - name: Publish (stub)
-        run: echo "Publishing to PyPI would happen here."
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: condensite-cde-dist
+          path: dist/*
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist

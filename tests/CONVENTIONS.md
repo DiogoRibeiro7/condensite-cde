@@ -8,5 +8,5 @@
   - `tests/unit/`: pure function/class behavior, mocked dependencies.
   - `tests/integration/`: estimator training/prediction loops, CLI scripts.
   - `tests/regression/`: serialized artifacts, invariance checks, deterministic snapshots.
-- **Baselines**: Regenerate regression fixtures after intentional behavior changes via `poetry run python scripts/generate_regression_baselines.py` (ensures `tests/regression/baselines/*` stay in sync). Document resulting hash in PRs.
+- **Baselines**: Regenerate regression fixtures after intentional behavior changes via `poetry run python scripts/generate_regression_baselines.py` (ensures `tests/regression/baselines/*` stay in sync). The script now writes `baseline_{float32,float64}.npz` plus `baseline_metrics.json` (containing quantile grids, tail thresholds, and calibration histograms). After running it, sanity-check the printed hash, skim the JSON for reasonableness, and mention the refresh in your PR.
 - **Fixtures**: Place reusable data/expectations under `tests/fixtures/` and load via helper utilities.

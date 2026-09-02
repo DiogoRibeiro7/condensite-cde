@@ -32,15 +32,16 @@ def make_dataset(n_samples: int = 400) -> tuple[np.ndarray, np.ndarray]:
 
 def evaluate_sampler(
     sampler: str,
-    X_train: np.ndarray,
-    y_train: np.ndarray,
-    X_val: np.ndarray,
-    y_val: np.ndarray,
+    *,
+    train_split: tuple[np.ndarray, np.ndarray],
+    val_split: tuple[np.ndarray, np.ndarray],
     grid: np.ndarray,
     seeds: tuple[int, ...],
 ) -> dict[str, float]:
     nll_scores: list[float] = []
     crps_scores: list[float] = []
+    X_train, y_train = train_split
+    X_val, y_val = val_split
     for idx, seed in enumerate(seeds):
         config = CondensiteTorchCDEConfig(
             hidden_sizes=(48, 48),
@@ -80,7 +81,13 @@ def main() -> None:
     seeds = (11, 23, 37)
     results: dict[str, dict[str, float]] = {}
     for sampler in samplers:
-        metrics = evaluate_sampler(sampler, X_train, y_train, X_val, y_val, grid, seeds)
+        metrics = evaluate_sampler(
+            sampler,
+            train_split=(X_train, y_train),
+            val_split=(X_val, y_val),
+            grid=grid,
+            seeds=seeds,
+        )
         results[sampler] = metrics
 
     print(json.dumps(results, indent=2))
