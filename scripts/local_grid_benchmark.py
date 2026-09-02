@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -15,9 +16,19 @@ except OSError as exc:  # pragma: no cover
     print(json.dumps({"error": f"Torch unavailable: {exc}"}))
     raise SystemExit(0) from exc
 
-from benchmarks.datasets import load_dataset
+# Direct execution sets sys.path[0] to scripts/. Add the repository root so the
+# documented ``python scripts/local_grid_benchmark.py`` entrypoint can import
+# the benchmark package without requiring an editable install of that package.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
-from condensite_torch import CondensiteTorchCDE, CondensiteTorchCDEConfig, make_local_grid
+from benchmarks.datasets import load_dataset  # noqa: E402
+from condensite_torch import (  # noqa: E402
+    CondensiteTorchCDE,
+    CondensiteTorchCDEConfig,
+    make_local_grid,
+)
 
 DEFAULT_DATASETS = ("heteroscedastic", "multimodal", "heavy_tail")
 
@@ -44,8 +55,7 @@ def _time_eval(
 ) -> tuple[dict[str, float], float]:
     start = time.perf_counter()
     metrics = estimator.evaluate(X, y, **kwargs)
-    duration = time.perf_counter() - start
-    return metrics, duration
+    return metrics, time.perf_counter() - start
 
 
 def benchmark_dataset(
@@ -58,14 +68,13 @@ def benchmark_dataset(
 ) -> dict[str, object]:
     bundle = load_dataset(name)
     estimator = _fit_estimator(bundle.X_train, bundle.y_train)
-    global_grid = estimator._default_y_grid()
+    global_grid = estimator._default_y_grid()  # noqa: SLF001
     metrics_global, runtime_global = _time_eval(
         estimator,
         bundle.X_test,
         bundle.y_test,
         y_grid=global_grid,
     )
-
     local_kwargs = {
         "use_local_grid": True,
         "local_grid_params": {
@@ -81,8 +90,6 @@ def benchmark_dataset(
         bundle.y_test,
         **local_kwargs,
     )
-
-    # Coverage diagnostic to quantify how often y_test sits inside grid bounds.
     local_grids = make_local_grid(
         estimator,
         bundle.X_test,
@@ -96,11 +103,9 @@ def benchmark_dataset(
     )
     coverage_local = float(
         np.mean(
-            (bundle.y_test >= local_grids[:, 0])
-            & (bundle.y_test <= local_grids[:, -1]),
+            (bundle.y_test >= local_grids[:, 0]) & (bundle.y_test <= local_grids[:, -1]),
         ),
     )
-
     return {
         "dataset": name,
         "global": {
@@ -168,8 +173,9 @@ def main() -> None:
     }
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    print(json.dumps(payload, indent=2))
+    rendered = json.dumps(payload, indent=2, allow_nan=False)
+    out_path.write_text(rendered, encoding="utf-8")
+    print(rendered)
 
 
 if __name__ == "__main__":
