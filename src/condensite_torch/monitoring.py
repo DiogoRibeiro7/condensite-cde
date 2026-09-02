@@ -91,6 +91,9 @@ def _baseline_histogram_edges(baseline: NDArray[np.float64], bins: int) -> NDArr
         lower = np.nextafter(value, -np.inf)
         upper = np.nextafter(value, np.inf)
         return np.array([-np.inf, lower, upper, np.inf], dtype=np.float64)
+    if edges.size == 2:
+        midpoint = float(edges[0] + (edges[1] - edges[0]) / 2.0)
+        return np.array([-np.inf, midpoint, np.inf], dtype=np.float64)
     interior = edges[1:-1]
     return np.concatenate(([-np.inf], interior, [np.inf])).astype(np.float64, copy=False)
 
@@ -163,11 +166,7 @@ def compare_windows(
     *,
     thresholds: MonitoringThresholds | None = None,
 ) -> list[SchemaDict]:
-    """Compare PSI/KS drift for baseline vs current feature windows.
-
-    Baseline and current windows may contain different numbers of observations; only
-    the feature dimension must agree.
-    """
+    """Compare PSI/KS drift for baseline vs current feature windows."""
     thresholds = thresholds or MonitoringThresholds()
     baseline = np.asarray(baseline_features, dtype=np.float64)
     current = np.asarray(current_features, dtype=np.float64)
