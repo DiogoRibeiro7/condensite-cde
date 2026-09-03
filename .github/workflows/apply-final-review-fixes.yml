@@ -46,16 +46,31 @@ jobs:
           PY
       - name: Apply fixes
         run: python scripts/apply_final_review_fixes.py
-      - name: Format and lint
+      - name: Finish target-range cleanup
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/condensite_torch/estimator.py")
+          text = path.read_text(encoding="utf-8")
+          text = text.replace(
+              "        y_min = float(np.min(y)) if y.size else None\n"
+              "        y_max = float(np.max(y)) if y.size else None\n",
+              "",
+              1,
+          )
+          path.write_text(text, encoding="utf-8")
+          PY
+      - name: Remove applicator scaffolding
+        run: |
+          rm scripts/apply_final_review_fixes.py
+          rm .github/workflows/apply-final-review-fixes.yml
+      - name: Format and lint final tree
         run: |
           poetry run ruff format .
           poetry run ruff check .
       - name: Reviewer regression tests
         run: poetry run pytest -q tests/unit/test_reviewer_estimator_fixes.py
-      - name: Remove applicator scaffolding
-        run: |
-          rm scripts/apply_final_review_fixes.py
-          rm .github/workflows/apply-final-review-fixes.yml
       - name: Commit final fixes
         run: |
           git config user.name "github-actions[bot]"
