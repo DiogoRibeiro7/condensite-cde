@@ -71,7 +71,11 @@ class MultiTargetCondensite:
 
         built_models: list[CondensiteTorchCDE] = []
         for dim in range(self._dimension):
-            features = X_arr if self.mode == "independent" else self._augment_features(X_arr, Y_arr[:, :dim])
+            features = (
+                X_arr
+                if self.mode == "independent"
+                else self._augment_features(X_arr, Y_arr[:, :dim])
+            )
             config = copy.deepcopy(self.base_config)
             estimator = CondensiteTorchCDE(config=config, random_seed=self.random_seed + dim)
             estimator.fit(features, Y_arr[:, dim])
@@ -120,12 +124,12 @@ class MultiTargetCondensite:
         if self.mode == "shared":
             estimator = self._require_shared_estimator()
             flat_density = density.reshape(-1, grid.size)
-            cdf = estimator._cdf_from_pdf(flat_density, grid)  # noqa: SLF001
+            cdf = estimator._cdf_from_pdf(flat_density, grid)
             cdfs[:] = cdf.reshape(X.shape[0], self._dimension, grid.size)
             return cdfs
         for dim, estimator in enumerate(self._models):
             per_dim_density = density[:, dim, :]
-            cdf = estimator._cdf_from_pdf(per_dim_density, grid)  # noqa: SLF001
+            cdf = estimator._cdf_from_pdf(per_dim_density, grid)
             cdfs[:, dim, :] = cdf
         return cdfs
 
@@ -146,8 +150,8 @@ class MultiTargetCondensite:
             estimator = self._require_shared_estimator()
             features = self._tile_with_target_indicator(X_arr)
             values = estimator.predict_quantile(features, q_arr, y_grid=y_grid, head=head)
-            stacked = values.reshape(X_arr.shape[0], self._dimension, q_arr.size)
-            return stacked[..., 0] if scalar else stacked
+            shared_values = values.reshape(X_arr.shape[0], self._dimension, q_arr.size)
+            return shared_values[..., 0] if scalar else shared_values
         per_dim = []
         for dim, estimator in enumerate(self._models):
             features = self._features_for_prediction(X_arr, y_context, dim)
@@ -243,8 +247,12 @@ class MultiTargetCondensite:
         config = copy.deepcopy(self.base_config)
         preprocessor = config.preprocessor
         if preprocessor is not None and preprocessor.numeric_indices is not None:
-            indicator_indices = range(original_feature_count, original_feature_count + self._dimension)
-            preprocessor.numeric_indices = sorted(set(preprocessor.numeric_indices).union(indicator_indices))
+            indicator_indices = range(
+                original_feature_count, original_feature_count + self._dimension
+            )
+            preprocessor.numeric_indices = sorted(
+                set(preprocessor.numeric_indices).union(indicator_indices)
+            )
         return config
 
     def _ensure_fitted(self) -> None:

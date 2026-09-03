@@ -15,7 +15,7 @@ def test_mse_loss_elementwise_values() -> None:
     preds = torch.tensor([[0.0, 0.5], [1.0, -0.5]])
     targets = torch.zeros_like(preds)
     values = spec.elementwise_fn(preds, targets)
-    expected = preds ** 2
+    expected = preds**2
     assert torch.allclose(values, expected)
 
 

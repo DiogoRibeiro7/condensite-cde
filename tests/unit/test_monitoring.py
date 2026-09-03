@@ -28,7 +28,8 @@ def test_population_stability_index_bounds() -> None:
 def test_population_stability_index_detects_reference_shift() -> None:
     base = np.linspace(-1.0, 1.0, 200)
     shifted = np.linspace(4.0, 6.0, 80)
-    assert population_stability_index(base, shifted) > 0.25
+    minimum_detectable_psi = 0.25
+    assert population_stability_index(base, shifted) > minimum_detectable_psi
 
 
 def test_ks_drift_increases_with_shift() -> None:
@@ -85,8 +86,9 @@ def test_compare_windows_allows_different_window_lengths() -> None:
     rng = np.random.default_rng(11)
     baseline = rng.normal(size=(120, 3))
     current = rng.normal(size=(35, 3))
-    stats = compare_windows(baseline, current, ["a", "b", "c"])
-    assert len(stats) == 3
+    feature_names = ["a", "b", "c"]
+    stats = compare_windows(baseline, current, feature_names)
+    assert len(stats) == len(feature_names)
 
 
 def test_compare_windows_rejects_feature_dimension_mismatch() -> None:

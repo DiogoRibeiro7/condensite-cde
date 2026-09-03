@@ -42,7 +42,7 @@ def test_training_history_contains_validation_metrics(torch_available: bool) -> 
         assert "val_integral_error" in record
 
 
-def test_tuner_returns_best_configuration(torch_available: bool) -> None:
+def test_tuner_returns_best_configuration(torch_available: bool, tmp_path) -> None:
     assert torch_available
     module = importlib.import_module("condensite_torch")
     CondensiteTorchCDEConfig = module.CondensiteTorchCDEConfig
@@ -64,11 +64,15 @@ def test_tuner_returns_best_configuration(torch_available: bool) -> None:
         base_config=base_config,
         metric="val_crps",
         random_seed=10,
+        run_root=tmp_path,
     )
     assert result.best_config.bandwidth in {0.08, 0.12}
     assert result.best_config.m_aux in {12, 16}
     assert len(result.history) == len(bandwidths) * len(aux_values)
     assert result.metric_name == "val_crps"
+    json_artifacts = list(result.run_dir.rglob("*.json"))
+    assert json_artifacts
+    assert all(path.read_text(encoding="utf-8").endswith("\n") for path in json_artifacts)
 
 
 def test_tuner_uses_cache_for_identical_configs(

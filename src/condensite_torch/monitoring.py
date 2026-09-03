@@ -13,6 +13,7 @@ from numpy.typing import NDArray
 SchemaDict = dict[str, Any]
 _FEATURE_DIM = 2
 _MIN_BINS = 2
+_TWO_EDGE_CASE = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,7 +92,7 @@ def _baseline_histogram_edges(baseline: NDArray[np.float64], bins: int) -> NDArr
         lower = np.nextafter(value, -np.inf)
         upper = np.nextafter(value, np.inf)
         return np.array([-np.inf, lower, upper, np.inf], dtype=np.float64)
-    if edges.size == 2:
+    if edges.size == _TWO_EDGE_CASE:
         midpoint = float(edges[0] + (edges[1] - edges[0]) / 2.0)
         return np.array([-np.inf, midpoint, np.inf], dtype=np.float64)
     interior = edges[1:-1]

@@ -256,7 +256,9 @@ class TabularPreprocessor:
                 normalized[idx] = ""
             else:
                 try:
-                    normalized[idx] = "" if isinstance(value, float) and np.isnan(value) else str(value)
+                    normalized[idx] = (
+                        "" if isinstance(value, float) and np.isnan(value) else str(value)
+                    )
                 except TypeError:
                     normalized[idx] = ""
         return normalized.astype(str)

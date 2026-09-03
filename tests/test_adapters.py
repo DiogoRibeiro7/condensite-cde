@@ -46,7 +46,7 @@ def test_sklearn_wrapper_fit_predict_score(toy_data, fast_config, torch_availabl
     preds = adapter.predict(X[:5])
     assert preds.shape == (5,)
     pdf = adapter.predict_density(X[:3], None)
-    assert pdf.shape == (3, adapter._prediction_grid.size)  # noqa: SLF001 - internal grid
+    assert pdf.shape == (3, adapter._prediction_grid.size)
     interval = adapter.predict_interval(X[:2], coverage=0.8)
     assert interval[0].shape == interval[1].shape == (2,)
     score = adapter.score(X[:10], y[:10])
@@ -69,7 +69,9 @@ def test_sklearn_wrapper_save_load_roundtrip(tmp_path, toy_data, fast_config, to
 
 
 @pytest.mark.skipif(pd is None, reason="pandas optional dependency")
-def test_pandas_adapter_flow(toy_data, fast_config, torch_available):  # pragma: no cover - requires pandas
+def test_pandas_adapter_flow(
+    toy_data, fast_config, torch_available
+):  # pragma: no cover - requires pandas
 
     X, y = toy_data
     frame = pd.DataFrame(X, columns=["feat0", "feat1", "feat2"])
@@ -78,7 +80,8 @@ def test_pandas_adapter_flow(toy_data, fast_config, torch_available):  # pragma:
     adapter.fit(frame, target="target")
     preds = adapter.predict(frame.head(3))
     assert list(preds.index) == list(frame.head(3).index)
-    pdf_df = adapter.predict_density(frame.head(2))
-    assert pdf_df.shape[0] == 2
+    density_frame = frame.head(2)
+    pdf_df = adapter.predict_density(density_frame)
+    assert pdf_df.shape[0] == len(density_frame)
     interval_df = adapter.predict_interval(frame.head(4))
     assert list(interval_df.columns) == ["low", "high"]

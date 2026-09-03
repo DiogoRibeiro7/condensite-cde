@@ -24,6 +24,7 @@ FeatureArray = NDArray[np.floating]
 TargetArray = NDArray[np.floating]
 FoldIndices = list[NDArray[np.int64]]
 _DEFAULT_METRICS: tuple[str, ...] = ("nll", "crps", "coverage")
+_MIN_CV_FOLDS = 2
 
 
 @dataclass(slots=True)
@@ -73,8 +74,8 @@ class CrossValidationResult:
         return payload
 
 
-def cross_validate(  # noqa: PLR0913
-    model: "CondensiteTorchCDE | CondensiteTorchCDEConfig",
+def cross_validate(  # noqa: PLR0913, PLR0914, PLR0915
+    model: CondensiteTorchCDE | CondensiteTorchCDEConfig,
     X: FeatureArray,
     y: TargetArray,
     *,
@@ -99,7 +100,7 @@ def cross_validate(  # noqa: PLR0913
     if "coverage" in metric_set and (not np.isfinite(coverage) or not 0.0 < coverage < 1.0):
         msg = "coverage must be in the open interval (0, 1)."
         raise ValueError(msg)
-    if cv < 2:
+    if cv < _MIN_CV_FOLDS:
         msg = "cv must be at least 2."
         raise ValueError(msg)
 
@@ -143,9 +144,9 @@ def cross_validate(  # noqa: PLR0913
             random_seed=int(fold_seed),
         )
         estimator.fit(X_arr[train_idx], y_arr[train_idx])
-        grid = estimator._default_y_grid()  # noqa: SLF001
+        grid = estimator._default_y_grid()
         pdf = estimator.predict_density(X_arr[val_idx], grid)
-        cdf = estimator._cdf_from_pdf(pdf, grid)  # noqa: SLF001
+        cdf = estimator._cdf_from_pdf(pdf, grid)
         fold_metrics = _compute_metrics(
             estimator,
             metric_set,
@@ -193,7 +194,7 @@ def cross_validate(  # noqa: PLR0913
     return result
 
 
-def _compute_metrics(
+def _compute_metrics(  # noqa: PLR0913, PLR0917
     estimator: CondensiteTorchCDE,
     metrics: set[str],
     y_val: NDArray[np.float64],
@@ -213,7 +214,7 @@ def _compute_metrics(
             raise ValueError(msg)
         tail_mass = (1.0 - float(coverage)) / 2.0
         probs = np.array([tail_mass, 1.0 - tail_mass], dtype=np.float64)
-        quantiles = estimator._quantiles_from_cdf(cdf, grid, probs)  # noqa: SLF001
+        quantiles = estimator._quantiles_from_cdf(cdf, grid, probs)
         results["coverage"] = coverage_rate(y_val, quantiles[:, 0], quantiles[:, 1])
     return results
 
@@ -283,7 +284,7 @@ def _make_stratified_folds(
     unique = np.unique(targets)
     if unique.size <= 1:
         return None
-    bin_count = min(max(cv * 2, 2), min(unique.size, 20))
+    bin_count = min(max(cv * _MIN_CV_FOLDS, _MIN_CV_FOLDS), unique.size, 20)
     quantiles = np.linspace(0.0, 1.0, bin_count + 1)
     edges = np.unique(np.quantile(targets, quantiles))
     if edges.size <= 1:
@@ -304,8 +305,8 @@ def _make_stratified_folds(
 
 
 def _resolve_config(
-    model: "CondensiteTorchCDE | CondensiteTorchCDEConfig",
-) -> "CondensiteTorchCDEConfig":
+    model: CondensiteTorchCDE | CondensiteTorchCDEConfig,
+) -> CondensiteTorchCDEConfig:
     estimator_cls, config_cls = _estimator_classes()
     if isinstance(model, config_cls):
         return copy.deepcopy(model)
@@ -316,15 +317,15 @@ def _resolve_config(
 
 
 def _instantiate_estimator(
-    config: "CondensiteTorchCDEConfig",
+    config: CondensiteTorchCDEConfig,
     random_seed: int,
-) -> "CondensiteTorchCDE":
+) -> CondensiteTorchCDE:
     estimator_cls, _ = _estimator_classes()
     return estimator_cls(config=config, random_seed=int(random_seed))
 
 
 @lru_cache(maxsize=1)
-def _estimator_classes() -> tuple[type["CondensiteTorchCDE"], type["CondensiteTorchCDEConfig"]]:
+def _estimator_classes() -> tuple[type[CondensiteTorchCDE], type[CondensiteTorchCDEConfig]]:
     module = import_module("condensite_torch.estimator")
     return module.CondensiteTorchCDE, module.CondensiteTorchCDEConfig
 

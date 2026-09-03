@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from itertools import pairwise
+
 import numpy as np
 
 from condensite_torch import CondensiteTorchCDE, CondensiteTorchCDEConfig
@@ -11,7 +13,7 @@ from condensite_torch.metrics import crps_from_cdf, nll_from_pdf
 def test_metrics_return_finite_values() -> None:
     y_grid = np.linspace(-3, 3, 101)
     pdf = np.exp(-0.5 * y_grid**2)
-    pdf /= np.trapezoid(pdf, y_grid)
+    pdf /= np.trapz(pdf, y_grid)
     pdf_stacked = np.vstack([pdf, pdf])
     cdf_body = 0.5 * (pdf_stacked[:, 1:] + pdf_stacked[:, :-1]) * np.diff(y_grid)
     cdf = np.concatenate([np.zeros((2, 1)), np.cumsum(cdf_body, axis=1)], axis=1)
@@ -26,7 +28,7 @@ def test_metrics_return_finite_values() -> None:
 def test_better_pdf_has_lower_nll() -> None:
     y_grid = np.linspace(-2, 2, 51)
     pdf_good = np.exp(-0.5 * (y_grid - 0.5) ** 2)
-    pdf_good /= np.trapezoid(pdf_good, y_grid)
+    pdf_good /= np.trapz(pdf_good, y_grid)
     pdf_bad = np.ones_like(pdf_good) / (y_grid[-1] - y_grid[0])
     y_true = np.array([0.6])
     nll_good = nll_from_pdf(y_true, y_grid, pdf_good[None, :])
@@ -52,5 +54,5 @@ def test_tail_probability_monotone() -> None:
         estimator.predict_tail_prob(X[:8], threshold=th, y_grid=grid, side="right")
         for th in thresholds
     ]
-    for earlier, later in zip(tail_probs, tail_probs[1:]):
+    for earlier, later in pairwise(tail_probs):
         assert np.all(earlier >= later)

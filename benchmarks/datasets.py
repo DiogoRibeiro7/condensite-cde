@@ -70,6 +70,7 @@ def heteroscedastic(n_train: int = 400, n_test: int = 200, seed: int = 0) -> Dat
     Complexity:
         O(n_train + n_test).
     """
+
     def builder(
         rng: np.random.Generator,
         n: int,
@@ -103,6 +104,7 @@ def multimodal(n_train: int = 400, n_test: int = 200, seed: int = 1) -> DatasetB
     Complexity:
         O(n_train + n_test).
     """
+
     def builder(
         rng: np.random.Generator,
         n: int,
@@ -138,6 +140,7 @@ def heavy_tail(n_train: int = 400, n_test: int = 200, seed: int = 2) -> DatasetB
     Complexity:
         O(n_train + n_test).
     """
+
     def builder(
         rng: np.random.Generator,
         n: int,
@@ -171,6 +174,7 @@ def skewed(n_train: int = 400, n_test: int = 200, seed: int = 3) -> DatasetBundl
     Complexity:
         O(n_train + n_test).
     """
+
     def builder(
         rng: np.random.Generator,
         n: int,
@@ -204,6 +208,7 @@ def outliers(n_train: int = 400, n_test: int = 200, seed: int = 4) -> DatasetBun
     Complexity:
         O(n_train + n_test).
     """
+
     def builder(
         rng: np.random.Generator,
         n: int,

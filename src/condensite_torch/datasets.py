@@ -71,7 +71,7 @@ def _resolve_format(path: str | Path, file_format: str) -> str:
     return "csv"
 
 
-def _load_delimited(
+def _load_delimited(  # noqa: PLR0914
     path: str | Path,
     target_column: str | None,
     *,
@@ -111,7 +111,7 @@ def _load_delimited(
     for row in rows:
         if target_column is not None:
             value = row.get(target_column, "")
-            if value is None or value.strip() == "":
+            if value is None or not value.strip():
                 msg = f"Target column '{target_column}' contains a missing value."
                 raise ValueError(msg)
             y_values.append(float(value))
@@ -119,7 +119,9 @@ def _load_delimited(
             raw_columns[name].append(row.get(name, "") or "")
 
     converted_columns = [_infer_column(raw_columns[name]) for name in remaining_names]
-    feature_rows = list(zip(*converted_columns, strict=True)) if converted_columns else [()] * len(rows)
+    feature_rows = (
+        list(zip(*converted_columns, strict=True)) if converted_columns else [()] * len(rows)
+    )
     X_arr = np.asarray(feature_rows, dtype=object)
     y_arr = np.asarray(y_values, dtype=np.float64) if target_column is not None else None
     return X_arr, y_arr, remaining_names
@@ -127,7 +129,7 @@ def _load_delimited(
 
 def _infer_column(values: Sequence[str]) -> list[Any]:
     """Infer a numeric column while preserving empty fields as missing values."""
-    non_missing = [value for value in values if value.strip() != ""]
+    non_missing = [value for value in values if value.strip()]
     numeric = bool(non_missing)
     if numeric:
         try:
@@ -136,8 +138,8 @@ def _infer_column(values: Sequence[str]) -> list[Any]:
         except ValueError:
             numeric = False
     if numeric:
-        return [np.nan if value.strip() == "" else float(value) for value in values]
-    return [None if value.strip() == "" else value for value in values]
+        return [np.nan if not value.strip() else float(value) for value in values]
+    return [None if not value.strip() else value for value in values]
 
 
 def _load_parquet(

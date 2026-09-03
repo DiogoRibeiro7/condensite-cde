@@ -24,6 +24,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from benchmarks.datasets import load_dataset  # noqa: E402
+
 from condensite_torch import (  # noqa: E402
     CondensiteTorchCDE,
     CondensiteTorchCDEConfig,
@@ -68,7 +69,7 @@ def benchmark_dataset(
 ) -> dict[str, object]:
     bundle = load_dataset(name)
     estimator = _fit_estimator(bundle.X_train, bundle.y_train)
-    global_grid = estimator._default_y_grid()  # noqa: SLF001
+    global_grid = estimator._default_y_grid()
     metrics_global, runtime_global = _time_eval(
         estimator,
         bundle.X_test,

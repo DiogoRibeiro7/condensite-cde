@@ -61,7 +61,7 @@ def _pit_values_for_dataset(
     return np.asarray(values, dtype=np.float64)
 
 
-def main() -> None:
+def main() -> None:  # noqa: PLR0914
     args = _parse_args()
     estimator = CondensiteTorchCDE.load(args.model, map_location="cpu")
     baseline = load_tabular(args.baseline, target_column=args.target, file_format=args.format)
@@ -80,7 +80,7 @@ def main() -> None:
         raise ValueError(msg)
     baseline_targets = np.asarray(baseline[1], dtype=np.float64)
     current_targets = np.asarray(current[1], dtype=np.float64)
-    grid = estimator._default_y_grid()  # noqa: SLF001
+    grid = estimator._default_y_grid()
     cdf_base = estimator.predict_cdf(baseline_features, grid)
     cdf_curr = estimator.predict_cdf(current_features, grid)
     pit_base = _pit_values_for_dataset(baseline_targets, grid, cdf_base)

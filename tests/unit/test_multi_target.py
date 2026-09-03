@@ -57,7 +57,7 @@ def test_shared_mode_uses_single_estimator() -> None:
     config = CondensiteTorchCDEConfig(epochs=3, patience=1, m_aux=10, sampler="sobol")
     model = MultiTargetCondensite(config, mode="shared", random_seed=3).fit(X, Y)
     assert model.mode == "shared"
-    assert model._shared_estimator is not None  # noqa: SLF001
+    assert model._shared_estimator is not None
     grid = np.linspace(Y.min() - 0.5, Y.max() + 0.5, 32)
     pdf = model.predict_density(X[:6], grid)
     assert pdf.shape == (6, 2, grid.size)

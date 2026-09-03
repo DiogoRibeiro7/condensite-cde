@@ -1,4 +1,5 @@
 """Neural network building blocks used by the Condensite estimator."""
+
 from __future__ import annotations
 
 import copy

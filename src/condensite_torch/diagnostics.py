@@ -26,10 +26,7 @@ def _ensure_shapes(
         raise ValueError(msg)
     values_arr = np.asarray(values, dtype=np.float64)
     if values_arr.shape != (y_true_arr.shape[0], y_grid_arr.shape[0]):
-        msg = (
-            "values array must have shape (n_samples, len(y_grid)), "
-            f"got {values_arr.shape}"
-        )
+        msg = f"values array must have shape (n_samples, len(y_grid)), got {values_arr.shape}"
         raise ValueError(msg)
     return y_true_arr, y_grid_arr, values_arr
 
