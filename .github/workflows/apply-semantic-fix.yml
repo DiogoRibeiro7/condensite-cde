@@ -1,0 +1,48 @@
+name: Apply semantic estimator fix
+
+on:
+  push:
+    branches:
+      - fix/train-only-validation-tail-es
+    paths:
+      - scripts/apply_semantic_fix.py
+      - .github/workflows/apply-semantic-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/train-only-validation-tail-es
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Poetry
+        run: pip install poetry==2.2.1
+      - name: Install dependencies
+        run: poetry install --no-interaction
+      - name: Apply patch
+        run: poetry run python scripts/apply_semantic_fix.py
+      - name: Remove temporary patch files
+        run: |
+          rm scripts/apply_semantic_fix.py
+          rm .github/workflows/apply-semantic-fix.yml
+      - name: Validate final tree
+        run: |
+          poetry run ruff format .
+          poetry run ruff check .
+          poetry run mypy
+          poetry run pytest -q
+      - name: Commit final tree
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: isolate validation preprocessing and tail ES semantics"
+          git push origin HEAD:fix/train-only-validation-tail-es
