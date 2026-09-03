@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-from types import MethodType
-
 import numpy as np
 import pytest
 from torch import nn
 
 from condensite_torch import CondensiteTorchCDE, CondensiteTorchCDEConfig
-from condensite_torch.scalers import MinMaxScaler1D, StandardScaler
 
 pytestmark = pytest.mark.unit
 
@@ -36,35 +33,43 @@ def test_derived_schema_does_not_freeze_training_target_range() -> None:
     assert schema.y_max is None
 
 
-def test_mc_dropout_preserves_training_mode_for_internal_passes() -> None:
-    samples = 3
-    rows = 2
-    grid_points = 8
-    config = CondensiteTorchCDEConfig(epistemic_mode="mc_dropout", mc_samples=samples)
-    estimator = CondensiteTorchCDE(config=config)
-    estimator._fitted = True
-    estimator.model = nn.Sequential(nn.Dropout(p=0.5), nn.Linear(1, 1))
-    estimator.x_scaler = StandardScaler().fit(np.zeros((rows, 1), dtype=np.float64))
-    estimator.y_scaler = MinMaxScaler1D().fit(np.array([-1.0, 1.0], dtype=np.float64))
-    calls: list[tuple[bool, bool]] = []
+def test_mc_dropout_enables_dropout_and_restores_eval_mode() -> None:
+    rng = np.random.default_rng(7)
+    X = rng.normal(size=(32, 2))
+    y = 0.4 * X[:, 0] - 0.2 * X[:, 1] + 0.05 * rng.normal(size=32)
+    config = CondensiteTorchCDEConfig(
+        hidden_sizes=(8,),
+        dropout=0.5,
+        epistemic_mode="mc_dropout",
+        mc_samples=3,
+        epochs=1,
+        patience=1,
+        batch_size=16,
+        m_aux=8,
+        val_fraction=0.2,
+    )
+    estimator = CondensiteTorchCDE(config=config, random_seed=7).fit(X, y)
+    assert estimator.model is not None
 
-    def fake_predict_density_internal(
-        self: CondensiteTorchCDE,
-        X: np.ndarray,
-        y_grid: np.ndarray,
-        *,
-        head: int | str | None = None,
-        force_eval: bool = True,
-    ) -> np.ndarray:
-        del head
-        calls.append((force_eval, self.model.training if self.model is not None else False))
-        return np.ones((X.shape[0], y_grid.size), dtype=np.float64)
+    dropout_modules = [module for module in estimator.model.modules() if isinstance(module, nn.Dropout)]
+    assert dropout_modules
+    observed_modes: list[bool] = []
+    handles = [
+        module.register_forward_pre_hook(
+            lambda current_module, _inputs: observed_modes.append(current_module.training),
+        )
+        for module in dropout_modules
+    ]
 
-    estimator._predict_density_internal = MethodType(fake_predict_density_internal, estimator)
-    X = np.zeros((rows, 1), dtype=np.float64)
-    grid = np.linspace(-1.0, 1.0, grid_points)
-    output = estimator._predict_density_mc_dropout(X, grid)
+    estimator.model.eval()
+    grid = np.linspace(float(y.min()), float(y.max()), 12)
+    try:
+        output = estimator._predict_density_mc_dropout(X[:2], grid)
+    finally:
+        for handle in handles:
+            handle.remove()
 
-    assert output.shape == (rows, grid_points)
-    assert calls == [(False, True)] * samples
-    assert estimator.model.training is True
+    assert output.shape == (2, grid.size)
+    assert observed_modes
+    assert all(observed_modes)
+    assert estimator.model.training is False
