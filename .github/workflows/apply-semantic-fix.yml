@@ -1,9 +1,9 @@
 name: Apply semantic estimator fix
 
 on:
-  push:
+  pull_request:
     branches:
-      - fix/train-only-validation-tail-es
+      - main
     paths:
       - scripts/apply_semantic_fix.py
       - .github/workflows/apply-semantic-fix.yml
