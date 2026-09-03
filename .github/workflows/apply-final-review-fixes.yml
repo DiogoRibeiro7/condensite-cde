@@ -1,4 +1,4 @@
-name: Generate final review fixes
+name: Finalize review fixes
 
 on:
   push:
@@ -9,10 +9,10 @@ on:
       - .github/workflows/apply-final-review-fixes.yml
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  generate:
+  finalize:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout branch
@@ -25,9 +25,17 @@ jobs:
           python-version: "3.11"
       - name: Install Poetry
         run: pip install poetry==2.2.1
-      - name: Install dependencies
-        run: poetry install --no-interaction
-      - name: Generate source and test fixes
+      - name: Install dependencies with retry
+        run: |
+          for attempt in 1 2 3; do
+            if poetry install --no-interaction; then
+              exit 0
+            fi
+            echo "Dependency install attempt ${attempt} failed"
+            sleep 10
+          done
+          exit 1
+      - name: Generate review fixes
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -45,23 +53,34 @@ jobs:
           applicator.write_text(text.replace(old, new, 1), encoding="utf-8")
           PY
           python scripts/apply_final_review_fixes.py
-      - name: Apply final typing and import fixes
+      - name: Apply final typing and regression fixes
         run: |
           python - <<'PY'
+          from __future__ import annotations
+
+          import json
           from pathlib import Path
 
-          def replace(path: str, old: str, new: str) -> None:
+          import numpy as np
+
+          def replace(path: str, old: str, new: str, *, count: int = 1) -> None:
               target = Path(path)
               text = target.read_text(encoding="utf-8")
               if old not in text:
-                  raise RuntimeError(f"Missing expected text in {path}: {old[:80]!r}")
-              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+                  raise RuntimeError(f"Missing expected text in {path}: {old[:100]!r}")
+              target.write_text(text.replace(old, new, count), encoding="utf-8")
 
           replace(
               "src/condensite_torch/estimator.py",
               "        y_min = float(np.min(y)) if y.size else None\n"
               "        y_max = float(np.max(y)) if y.size else None\n",
               "",
+          )
+          replace(
+              "src/condensite_torch/estimator.py",
+              "    @staticmethod\n"
+              "    def _combine_features(X_batch: Tensor, y_prime_chunk: Tensor) -> Tensor:\n",
+              "    def _combine_features(self, X_batch: Tensor, y_prime_chunk: Tensor) -> Tensor:  # noqa: PLR6301\n",
           )
           replace(
               "src/condensite_torch/metrics.py",
@@ -146,7 +165,11 @@ jobs:
               "        if not isinstance(data, pd.DataFrame):  # type: ignore[arg-type]\n",
               "        if not isinstance(data, pd.DataFrame):\n",
           )
-          text = text.replace("        return target  # type: ignore[return-value]\n", "        return target\n", 1)
+          text = text.replace(
+              "        return target  # type: ignore[return-value]\n",
+              "        return target\n",
+              1,
+          )
           text = text.replace(
               "            columns = (\n"
               "                grid_arr if grid_arr.ndim == 1 else [f\"y_{idx}\" for idx in range(density.shape[1])]\n"
@@ -209,43 +232,81 @@ jobs:
               ''')\n''',
               encoding="utf-8",
           )
+
+          reviewer_path = Path("tests/unit/test_reviewer_estimator_fixes.py")
+          reviewer = reviewer_path.read_text(encoding="utf-8")
+          reviewer = reviewer.replace(
+              "from condensite_torch import CondensiteTorchCDE, CondensiteTorchCDEConfig\n",
+              "from condensite_torch import CondensiteTorchCDE, CondensiteTorchCDEConfig\n"
+              "from condensite_torch.scalers import MinMaxScaler1D, StandardScaler\n",
+              1,
+          )
+          reviewer = reviewer.replace(
+              "    estimator._fitted = True\n"
+              "    estimator.model = nn.Sequential(nn.Dropout(p=0.5), nn.Linear(1, 1))\n",
+              "    estimator._fitted = True\n"
+              "    estimator.model = nn.Sequential(nn.Dropout(p=0.5), nn.Linear(1, 1))\n"
+              "    estimator.x_scaler = StandardScaler().fit(np.zeros((rows, 1), dtype=np.float64))\n"
+              "    estimator.y_scaler = MinMaxScaler1D().fit(np.array([-1.0, 1.0], dtype=np.float64))\n",
+              1,
+          )
+          reviewer_path.write_text(reviewer, encoding="utf-8")
+
+          replace(
+              "tests/unit/test_preprocessing.py",
+              "    assert transformed.shape == (data.shape[0], 8)\n",
+              "    expected_feature_count = 10\n"
+              "    assert transformed.shape == (data.shape[0], expected_feature_count)\n",
+          )
+          replace(
+              "tests/unit/test_preprocessing.py",
+              '        "x1=blue",\n'
+              '        "x1=__unknown__",\n'
+              '        "x2=cat",\n'
+              '        "x2=dog",\n'
+              '        "x2=__unknown__",\n',
+              '        "x1=blue",\n'
+              '        "x1=__missing__",\n'
+              '        "x1=__unknown__",\n'
+              '        "x2=cat",\n'
+              '        "x2=dog",\n'
+              '        "x2=__missing__",\n'
+              '        "x2=__unknown__",\n',
+          )
+
+          # Refresh only NLL metadata. The PDF/CDF/quantile snapshot arrays remain unchanged;
+          # the metric changed earlier to use zero density outside grid support.
+          import sys
+          sys.path.insert(0, "src")
+          from condensite_torch.metrics import nll_from_pdf
+
+          rng = np.random.default_rng(42)
+          X = rng.normal(size=(192, 2))
+          y = 0.4 * np.sin(X[:, 0]) - 0.25 * X[:, 1] + 0.15 * rng.normal(size=192)
+          y_test = y[int(0.75 * 192):]
+          metrics_path = Path("tests/regression/baselines/baseline_metrics.json")
+          payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+          for dtype_name in ("float32", "float64"):
+              bundle = np.load(f"tests/regression/baselines/baseline_{dtype_name}.npz")
+              grid = bundle["y_grid"].astype(np.float64)
+              pdf = bundle["pdf"].astype(np.float64)
+              payload["snapshots"][dtype_name]["nll"] = float(nll_from_pdf(y_test, grid, pdf))
+          metrics_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
           PY
-      - name: Remove scaffolding from generated tree
+      - name: Remove temporary scaffolding
         run: |
           rm scripts/apply_final_review_fixes.py
           rm .github/workflows/apply-final-review-fixes.yml
-      - name: Validate generated final tree
+      - name: Validate final tree
         run: |
           poetry run ruff format .
           poetry run ruff check .
           poetry run mypy
           poetry run pytest -q
-      - name: Package validated files
+      - name: Commit validated final tree
         run: |
-          tar -czf /tmp/final-review-files.tar.gz \
-            scripts/monitor_report.py \
-            src/condensite_cde/__init__.py \
-            src/condensite_cde/adapters.py \
-            src/condensite_cde/cv.py \
-            src/condensite_cde/grids.py \
-            src/condensite_cde/reports.py \
-            src/condensite_cde/tune.py \
-            src/condensite_torch/datasets.py \
-            src/condensite_torch/distribution_metrics.py \
-            src/condensite_torch/ensemble.py \
-            src/condensite_torch/estimator.py \
-            src/condensite_torch/metrics.py \
-            src/condensite_torch/monitoring.py \
-            src/condensite_torch/multi_target.py \
-            tests/test_adapters.py \
-            tests/test_cross_validation.py \
-            tests/test_metrics.py \
-            tests/unit/test_metrics.py \
-            tests/unit/test_monitoring.py \
-            tests/unit/test_reports.py \
-            tests/unit/test_reviewer_estimator_fixes.py
-      - name: Upload validated files
-        uses: actions/upload-artifact@v4
-        with:
-          name: final-review-files
-          path: /tmp/final-review-files.tar.gz
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: resolve final review and validation findings"
+          git push origin HEAD:ci-review-cleanup-final
