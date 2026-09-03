@@ -142,13 +142,16 @@ jobs:
               "        )\n",
               1,
           )
-          text = text.replace("  # type: ignore[arg-type]", "")
+          text = text.replace(
+              "        if not isinstance(data, pd.DataFrame):  # type: ignore[arg-type]\n",
+              "        if not isinstance(data, pd.DataFrame):\n",
+          )
           text = text.replace("        return target  # type: ignore[return-value]\n", "        return target\n", 1)
           text = text.replace(
               "            columns = (\n"
               "                grid_arr if grid_arr.ndim == 1 else [f\"y_{idx}\" for idx in range(density.shape[1])]\n"
               "            )\n",
-              "            columns: list[Any] = (\n"
+              "            columns = (\n"
               "                grid_arr.tolist()\n"
               "                if grid_arr.ndim == 1\n"
               "                else [f\"y_{idx}\" for idx in range(density.shape[1])]\n"
