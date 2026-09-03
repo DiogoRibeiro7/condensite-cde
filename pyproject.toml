@@ -22,7 +22,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "torch (>=2.5,<2.6)",
+    "torch (>=2.13.0,<2.14)",
     "numpy (>=1.26,<3.0.0)",
 ]
 
@@ -37,7 +37,7 @@ condensite = "condensite_torch.cli:main"
 
 [dependency-groups]
 dev = [
-    "pytest (>=9.0.2,<10.0.0)",
+    "pytest (>=9.0.3,<10.0.0)",
     "ruff (>=0.14.10,<0.15.0)",
     "mypy (>=1.19.1,<2.0.0)",
     "jsonschema (>=4.23.0,<5.0.0)",
