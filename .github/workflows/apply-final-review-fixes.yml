@@ -1,4 +1,4 @@
-name: Apply final review fixes
+name: Generate final review fixes
 
 on:
   push:
@@ -9,10 +9,10 @@ on:
       - .github/workflows/apply-final-review-fixes.yml
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply:
+  generate:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout branch
@@ -44,7 +44,7 @@ jobs:
               raise RuntimeError("Expected trapezoid replacement call was not found")
           path.write_text(text.replace(old, new, 1), encoding="utf-8")
           PY
-      - name: Apply fixes
+      - name: Generate source and test fixes
         run: python scripts/apply_final_review_fixes.py
       - name: Finish target-range cleanup
         run: |
@@ -61,20 +61,39 @@ jobs:
           )
           path.write_text(text, encoding="utf-8")
           PY
-      - name: Remove applicator scaffolding
+      - name: Remove scaffolding from generated tree
         run: |
           rm scripts/apply_final_review_fixes.py
           rm .github/workflows/apply-final-review-fixes.yml
-      - name: Format and lint final tree
+      - name: Validate generated final tree
         run: |
           poetry run ruff format .
           poetry run ruff check .
-      - name: Reviewer regression tests
-        run: poetry run pytest -q tests/unit/test_reviewer_estimator_fixes.py
-      - name: Commit final fixes
+          poetry run mypy
+          poetry run pytest -q
+      - name: Package generated files
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "fix: resolve final review and lint findings"
-          git push origin HEAD:ci-review-cleanup-final
+          tar -czf /tmp/final-review-files.tar.gz \
+            scripts/monitor_report.py \
+            src/condensite_cde/adapters.py \
+            src/condensite_cde/cv.py \
+            src/condensite_cde/reports.py \
+            src/condensite_cde/tune.py \
+            src/condensite_torch/datasets.py \
+            src/condensite_torch/distribution_metrics.py \
+            src/condensite_torch/ensemble.py \
+            src/condensite_torch/estimator.py \
+            src/condensite_torch/metrics.py \
+            src/condensite_torch/monitoring.py \
+            tests/test_adapters.py \
+            tests/test_cross_validation.py \
+            tests/test_metrics.py \
+            tests/unit/test_metrics.py \
+            tests/unit/test_monitoring.py \
+            tests/unit/test_reports.py \
+            tests/unit/test_reviewer_estimator_fixes.py
+      - name: Upload generated files
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-review-files
+          path: /tmp/final-review-files.tar.gz
