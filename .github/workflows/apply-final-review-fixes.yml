@@ -65,12 +65,10 @@ jobs:
         run: |
           rm scripts/apply_final_review_fixes.py
           rm .github/workflows/apply-final-review-fixes.yml
-      - name: Validate generated final tree
+      - name: Format and lint generated tree
         run: |
           poetry run ruff format .
           poetry run ruff check .
-          poetry run mypy
-          poetry run pytest -q
       - name: Package generated files
         run: |
           tar -czf /tmp/final-review-files.tar.gz \
@@ -97,3 +95,8 @@ jobs:
         with:
           name: final-review-files
           path: /tmp/final-review-files.tar.gz
+      - name: Type check generated tree
+        run: poetry run mypy
+      - name: Full tests
+        if: always()
+        run: poetry run pytest -q
