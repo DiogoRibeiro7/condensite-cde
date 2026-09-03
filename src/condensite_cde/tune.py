@@ -60,7 +60,7 @@ class _TuneRunContext:
         _write_json(artifact_dir / "history.json", training_history)
 
 
-def tune_bandwidth_m_aux(  # noqa: PLR0913
+def tune_bandwidth_m_aux(  # noqa: PLR0913, PLR0914
     X: NDArray[np.floating],
     y: NDArray[np.floating],
     bandwidths: Sequence[float],
@@ -247,7 +247,7 @@ def _array_fingerprint(values: NDArray[Any]) -> str:
     return digest.hexdigest()
 
 
-def _build_run_metadata(
+def _build_run_metadata(  # noqa: PLR0913, PLR0917
     config: CondensiteTorchCDEConfig,
     bandwidths: Sequence[float],
     m_aux_values: Sequence[int],
@@ -270,7 +270,7 @@ def _build_run_metadata(
     }
 
 
-def _clean_value(value: Any) -> Any:
+def _clean_value(value: Any) -> Any:  # noqa: PLR0911
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     if isinstance(value, np.generic):
@@ -283,7 +283,7 @@ def _clean_value(value: Any) -> Any:
         return {str(key): _clean_value(val) for key, val in value.items()}
     if isinstance(value, (list, tuple, set)):
         return [_clean_value(v) for v in value]
-    if is_dataclass(value):
+    if is_dataclass(value) and not isinstance(value, type):
         return _clean_value(asdict(value))
     return str(value)
 
@@ -296,7 +296,7 @@ def _write_json(path: Path, data: Any) -> None:
 def _load_json(path: Path, default: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not path.exists():
         return default.copy()
-    return json.loads(path.read_text(encoding="utf-8"))
+    return cast(list[dict[str, Any]], json.loads(path.read_text(encoding="utf-8")))
 
 
 def _validate_metadata(existing: dict[str, Any], expected: dict[str, Any]) -> None:

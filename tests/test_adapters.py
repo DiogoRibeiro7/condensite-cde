@@ -80,7 +80,8 @@ def test_pandas_adapter_flow(
     adapter.fit(frame, target="target")
     preds = adapter.predict(frame.head(3))
     assert list(preds.index) == list(frame.head(3).index)
-    pdf_df = adapter.predict_density(frame.head(2))
-    assert pdf_df.shape[0] == 2
+    density_frame = frame.head(2)
+    pdf_df = adapter.predict_density(density_frame)
+    assert pdf_df.shape[0] == len(density_frame)
     interval_df = adapter.predict_interval(frame.head(4))
     assert list(interval_df.columns) == ["low", "high"]

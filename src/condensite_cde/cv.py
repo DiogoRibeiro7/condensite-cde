@@ -24,6 +24,7 @@ FeatureArray = NDArray[np.floating]
 TargetArray = NDArray[np.floating]
 FoldIndices = list[NDArray[np.int64]]
 _DEFAULT_METRICS: tuple[str, ...] = ("nll", "crps", "coverage")
+_MIN_CV_FOLDS = 2
 
 
 @dataclass(slots=True)
@@ -73,7 +74,7 @@ class CrossValidationResult:
         return payload
 
 
-def cross_validate(  # noqa: PLR0913
+def cross_validate(  # noqa: PLR0913, PLR0914, PLR0915
     model: CondensiteTorchCDE | CondensiteTorchCDEConfig,
     X: FeatureArray,
     y: TargetArray,
@@ -99,7 +100,7 @@ def cross_validate(  # noqa: PLR0913
     if "coverage" in metric_set and (not np.isfinite(coverage) or not 0.0 < coverage < 1.0):
         msg = "coverage must be in the open interval (0, 1)."
         raise ValueError(msg)
-    if cv < 2:
+    if cv < _MIN_CV_FOLDS:
         msg = "cv must be at least 2."
         raise ValueError(msg)
 
@@ -193,7 +194,7 @@ def cross_validate(  # noqa: PLR0913
     return result
 
 
-def _compute_metrics(
+def _compute_metrics(  # noqa: PLR0913, PLR0917
     estimator: CondensiteTorchCDE,
     metrics: set[str],
     y_val: NDArray[np.float64],
@@ -283,7 +284,7 @@ def _make_stratified_folds(
     unique = np.unique(targets)
     if unique.size <= 1:
         return None
-    bin_count = min(max(cv * 2, 2), min(unique.size, 20))
+    bin_count = min(max(cv * _MIN_CV_FOLDS, _MIN_CV_FOLDS), unique.size, 20)
     quantiles = np.linspace(0.0, 1.0, bin_count + 1)
     edges = np.unique(np.quantile(targets, quantiles))
     if edges.size <= 1:

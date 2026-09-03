@@ -71,7 +71,7 @@ def _resolve_format(path: str | Path, file_format: str) -> str:
     return "csv"
 
 
-def _load_delimited(
+def _load_delimited(  # noqa: PLR0914
     path: str | Path,
     target_column: str | None,
     *,
@@ -111,7 +111,7 @@ def _load_delimited(
     for row in rows:
         if target_column is not None:
             value = row.get(target_column, "")
-            if value is None or value.strip() == "":
+            if value is None or not value.strip():
                 msg = f"Target column '{target_column}' contains a missing value."
                 raise ValueError(msg)
             y_values.append(float(value))
@@ -129,7 +129,7 @@ def _load_delimited(
 
 def _infer_column(values: Sequence[str]) -> list[Any]:
     """Infer a numeric column while preserving empty fields as missing values."""
-    non_missing = [value for value in values if value.strip() != ""]
+    non_missing = [value for value in values if value.strip()]
     numeric = bool(non_missing)
     if numeric:
         try:
@@ -138,8 +138,8 @@ def _infer_column(values: Sequence[str]) -> list[Any]:
         except ValueError:
             numeric = False
     if numeric:
-        return [np.nan if value.strip() == "" else float(value) for value in values]
-    return [None if value.strip() == "" else value for value in values]
+        return [np.nan if not value.strip() else float(value) for value in values]
+    return [None if not value.strip() else value for value in values]
 
 
 def _load_parquet(

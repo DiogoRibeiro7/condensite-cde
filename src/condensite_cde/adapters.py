@@ -7,7 +7,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -18,7 +18,7 @@ from condensite_torch import CondensiteTorchCDE, CondensiteTorchCDEConfig
 try:  # pragma: no cover - optional dependency
     import pandas as pd  # type: ignore[import-untyped]
 except Exception:  # pragma: no cover - import optional
-    pd = None  # type: ignore[assignment]
+    pd = None
 
 
 class _AdapterBase:
@@ -41,7 +41,7 @@ class _AdapterBase:
         if mode not in {"quantile", "linear"}:
             msg = f"grid_mode must be 'quantile' or 'linear', got {grid_mode!r}"
             raise ValueError(msg)
-        self.grid_mode: GridMode = mode  # type: ignore[assignment]
+        self.grid_mode = cast(GridMode, mode)
         self.random_seed = int(random_seed)
         if estimator is None:
             self.config = (
@@ -65,7 +65,7 @@ class _AdapterBase:
             raise RuntimeError(msg)
 
     def _fit_numpy(self, X: NDArray[np.object_], y: NDArray[np.float64]) -> None:
-        self._estimator.fit(X, y)
+        self._estimator.fit(X, y)  # type: ignore[arg-type]
         self._fitted = True
         self._prediction_grid = make_y_grid(y, grid_size=self.grid_size, mode=self.grid_mode)
 
@@ -101,10 +101,10 @@ class _AdapterBase:
         payload.update(self._extra_state())
         (base / self._STATE_FILENAME).write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
-    def _extra_state(self) -> dict[str, Any]:  # pragma: no cover - overridden by subclasses
+    def _extra_state(self) -> dict[str, Any]:  # noqa: PLR6301  # pragma: no cover
         return {}
 
-    def _load_extra_state(self, payload: Mapping[str, Any]) -> None:  # pragma: no cover - optional
+    def _load_extra_state(self, payload: Mapping[str, Any]) -> None:  # noqa: PLR6301  # pragma: no cover
         return None
 
     @classmethod
@@ -125,7 +125,7 @@ class _AdapterBase:
 class SklearnCondensiteRegressor(_AdapterBase):
     """Sklearn-style wrapper around CondensiteTorchCDE."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         *,
         config: CondensiteTorchCDEConfig | None = None,
@@ -172,7 +172,7 @@ class SklearnCondensiteRegressor(_AdapterBase):
             grid_arr = make_y_grid(target, grid_size=self.grid_size, mode=self.grid_mode)
         pdf = self._estimator.predict_density(X_arr, grid_arr)
         weighted = pdf * grid_arr.reshape(1, -1)
-        return np.trapz(weighted, x=grid_arr, axis=1)
+        return np.asarray(np.trapz(weighted, x=grid_arr, axis=1), dtype=np.float64)
 
     def predict_density(
         self,
@@ -220,7 +220,7 @@ class SklearnCondensiteRegressor(_AdapterBase):
                 params[f"config__{key}"] = value
         return params
 
-    def set_params(self, **params: Any) -> SklearnCondensiteRegressor:
+    def set_params(self, **params: Any) -> SklearnCondensiteRegressor:  # noqa: PLR0912
         config_updates: dict[str, Any] = {}
         for key, value in params.items():
             if key == "config":
@@ -245,7 +245,7 @@ class SklearnCondensiteRegressor(_AdapterBase):
                 if mode not in {"quantile", "linear"}:
                     msg = f"Unsupported grid_mode {value!r}"
                     raise ValueError(msg)
-                self.grid_mode = mode  # type: ignore[assignment]
+                self.grid_mode = cast(GridMode, mode)
             elif key.startswith("config__"):
                 config_updates[key.split("__", 1)[1]] = value
             else:
@@ -279,7 +279,7 @@ class SklearnCondensiteRegressor(_AdapterBase):
             random_seed=estimator.random_seed,
             prediction_strategy=str(state.get("prediction_strategy", "median")),
             grid_size=int(state.get("grid_size", 128)),
-            grid_mode=str(state.get("grid_mode", "quantile")),
+            grid_mode=cast(GridMode, str(state.get("grid_mode", "quantile"))),
             estimator=estimator,
         )
         grid_payload = state.get("prediction_grid")
@@ -303,7 +303,8 @@ class PandasCondensiteAdapter(SklearnCondensiteRegressor):
         self._feature_columns = list(feature_columns) if feature_columns is not None else None
         self._target_column = target_column
 
-    def _require_pandas(self) -> None:
+    @staticmethod
+    def _require_pandas() -> None:
         if pd is None:  # pragma: no cover - exercised when pandas missing
             msg = "pandas is required for PandasCondensiteAdapter."
             raise ImportError(msg)
@@ -312,7 +313,9 @@ class PandasCondensiteAdapter(SklearnCondensiteRegressor):
         if self._feature_columns is None:
             msg = "Fit the adapter before calling predict.*"
             raise RuntimeError(msg)
-        return frame[self._feature_columns].to_numpy(dtype=object, copy=False)
+        return np.asarray(
+            frame[self._feature_columns].to_numpy(dtype=object, copy=False), dtype=object
+        )
 
     def fit(
         self,
@@ -322,7 +325,7 @@ class PandasCondensiteAdapter(SklearnCondensiteRegressor):
         feature_columns: Sequence[str] | None = None,
     ) -> PandasCondensiteAdapter:
         self._require_pandas()
-        if not isinstance(data, pd.DataFrame):  # type: ignore[arg-type]
+        if not isinstance(data, pd.DataFrame):
             msg = "data must be a pandas DataFrame."
             raise TypeError(msg)
         frame = data
@@ -355,7 +358,7 @@ class PandasCondensiteAdapter(SklearnCondensiteRegressor):
             return frame[self._target_column]
         if isinstance(target, np.ndarray):
             return pd.Series(target, index=frame.index, name=self._target_column)
-        return target  # type: ignore[return-value]
+        return target
 
     def _resolve_features(
         self,
@@ -382,7 +385,7 @@ class PandasCondensiteAdapter(SklearnCondensiteRegressor):
 
     def predict(self, data: Any) -> Any:
         self._require_pandas()
-        if not isinstance(data, pd.DataFrame):  # type: ignore[arg-type]
+        if not isinstance(data, pd.DataFrame):
             msg = "data must be a pandas DataFrame."
             raise TypeError(msg)
         values = super().predict(self._frame_to_numpy(data))
@@ -395,7 +398,7 @@ class PandasCondensiteAdapter(SklearnCondensiteRegressor):
         y_grid: NDArray[np.floating] | Sequence[float] | None = None,
     ) -> Any:
         self._require_pandas()
-        if not isinstance(data, pd.DataFrame):  # type: ignore[arg-type]
+        if not isinstance(data, pd.DataFrame):
             msg = "data must be a pandas DataFrame."
             raise TypeError(msg)
         grid = self._resolve_prediction_grid(y_grid)
@@ -405,7 +408,9 @@ class PandasCondensiteAdapter(SklearnCondensiteRegressor):
         else:
             grid_arr = np.asarray(grid)
             columns = (
-                grid_arr if grid_arr.ndim == 1 else [f"y_{idx}" for idx in range(density.shape[1])]
+                grid_arr.tolist()
+                if grid_arr.ndim == 1
+                else [f"y_{idx}" for idx in range(density.shape[1])]
             )
         return pd.DataFrame(density, index=data.index, columns=columns)
 
@@ -417,7 +422,7 @@ class PandasCondensiteAdapter(SklearnCondensiteRegressor):
         y_grid: NDArray[np.floating] | Sequence[float] | None = None,
     ) -> Any:
         self._require_pandas()
-        if not isinstance(data, pd.DataFrame):  # type: ignore[arg-type]
+        if not isinstance(data, pd.DataFrame):
             msg = "data must be a pandas DataFrame."
             raise TypeError(msg)
         lows, highs = super().predict_interval(
@@ -454,7 +459,7 @@ class PandasCondensiteAdapter(SklearnCondensiteRegressor):
             random_seed=estimator.random_seed,
             prediction_strategy=str(state.get("prediction_strategy", "median")),
             grid_size=int(state.get("grid_size", 128)),
-            grid_mode=str(state.get("grid_mode", "quantile")),
+            grid_mode=cast(GridMode, str(state.get("grid_mode", "quantile"))),
             estimator=estimator,
         )
         grid_payload = state.get("prediction_grid")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+from itertools import pairwise
 from typing import Any
 
 CALIBRATION_REPORT_SCHEMA_VERSION = "1.0"
@@ -51,7 +52,7 @@ def build_calibration_report(
     if any(value < 0.0 or value > 1.0 for value in bin_edges):
         msg = "PIT histogram bin edges must lie in [0, 1]."
         raise ValueError(msg)
-    if any(right <= left for left, right in zip(bin_edges, bin_edges[1:], strict=True)):
+    if any(right <= left for left, right in pairwise(bin_edges)):
         msg = "PIT histogram bin edges must be strictly increasing."
         raise ValueError(msg)
 

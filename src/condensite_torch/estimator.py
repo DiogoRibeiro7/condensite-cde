@@ -110,6 +110,12 @@ class CondensiteTorchCDE:
         random_seed: int = 0,
     ) -> None:
         self.config = config or CondensiteTorchCDEConfig()
+        if self.config.epistemic_mode == "ensemble":
+            msg = (
+                "epistemic_mode='ensemble' is not implemented by CondensiteTorchCDE; "
+                "use EnsembleCondensite for ensemble uncertainty."
+            )
+            raise ValueError(msg)
         self.random_seed = int(random_seed)
         self._rng = np.random.default_rng(self.random_seed)
         self._sampler_call = 0
@@ -490,25 +496,25 @@ class CondensiteTorchCDE:
         y_grid: NDArray[np.floating],
         *,
         head: int | str | None = None,
+        force_eval: bool = True,
     ) -> NDArray[np.float64]:
         assert self.x_scaler is not None
         assert self.y_scaler is not None
         assert self.model is not None
-        y_scaler = self.y_scaler
-        model = self.model
         X_arr = np.asarray(X, dtype=object)
         grid_arr, local = self._process_y_grid(X_arr, y_grid)
         X_scaled = self._transform_with_preprocessor(X_arr).astype(np.float32, copy=False)
         x_tensor = torch.from_numpy(X_scaled).to(self._device)
         if local:
-            return self._predict_density_local(x_tensor, grid_arr, head=head)
+            return self._predict_density_local(x_tensor, grid_arr, head=head, force_eval=force_eval)
         y_scaled = self.y_scaler.transform(grid_arr).astype(np.float32, copy=False)
         y_tensor_scaled = torch.from_numpy(y_scaled).to(self._device)
         y_tensor = torch.from_numpy(grid_arr.astype(np.float32, copy=False)).to(self._device)
 
         row_batch = self._inference_row_batch_size(x_tensor.shape[0])
         outputs: list[Tensor] = []
-        self.model.eval()
+        if force_eval:
+            self.model.eval()
         with torch.no_grad():
             for start in range(0, x_tensor.shape[0], row_batch):
                 end = min(start + row_batch, x_tensor.shape[0])
@@ -565,7 +571,7 @@ class CondensiteTorchCDE:
         densities: list[NDArray[np.float64]] = []
         try:
             for _ in range(samples):
-                pdf = self._predict_density_internal(X_arr, y_grid_arr, head=head)
+                pdf = self._predict_density_internal(X_arr, y_grid_arr, head=head, force_eval=False)
                 densities.append(pdf)
         finally:
             self.model.train(original_mode)
@@ -578,6 +584,7 @@ class CondensiteTorchCDE:
         y_grids: NDArray[np.float64],
         *,
         head: int | str | None,
+        force_eval: bool = True,
     ) -> NDArray[np.float64]:
         assert self.y_scaler is not None
         assert self.model is not None
@@ -596,7 +603,8 @@ class CondensiteTorchCDE:
             features.append(torch.cat([x_row, y_row_scaled], dim=1))
         concatenated = torch.cat(features, dim=0)
         scale = max(float(y_scaler.data_range_), 1e-8)
-        model.eval()
+        if force_eval:
+            model.eval()
         with torch.no_grad():
             preds = torch.clamp(model(concatenated) / scale, min=1e-12)
         start = 0
@@ -1208,8 +1216,8 @@ class CondensiteTorchCDE:
     def _inference_row_batch_size(self, total_rows: int) -> int:
         size = self.config.inference_batch_size
         if size is None or size <= 0:
-            return total_rows
-        return max(1, min(total_rows, int(size)))
+            return max(1, total_rows)
+        return max(1, min(max(1, total_rows), int(size)))
 
     def _inference_grid_chunk_size(self, total_points: int) -> int:
         size = self.config.inference_grid_chunk_size
@@ -1230,7 +1238,7 @@ class CondensiteTorchCDE:
             end = min(start + chunk_size, total)
             yield y_prime[:, start:end], sample_weights[:, start:end]
 
-    def _combine_features(self, X_batch: Tensor, y_prime_chunk: Tensor) -> Tensor:
+    def _combine_features(self, X_batch: Tensor, y_prime_chunk: Tensor) -> Tensor:  # noqa: PLR6301
         chunk = y_prime_chunk.shape[1]
         x_expanded = X_batch.unsqueeze(1).expand(-1, chunk, -1)
         y_expanded = y_prime_chunk.unsqueeze(-1)
@@ -1567,7 +1575,7 @@ class CondensiteTorchCDE:
         X: NDArray[np.floating],
         y: NDArray[np.floating],
     ) -> SchemaConstraints | None:
-        """Build schema constraints using fitted preprocessors and target range."""
+        """Build schema constraints using fitted preprocessing metadata."""
         if X.ndim != _GRID_DIMENSION:
             return None
         preprocessor = self.preprocessor
@@ -1585,16 +1593,14 @@ class CondensiteTorchCDE:
             ]
             if counts:
                 max_card = max(counts)
-        y_min = float(np.min(y)) if y.size else None
-        y_max = float(np.max(y)) if y.size else None
         return SchemaConstraints(
             numeric_indices=numeric_indices,
             categorical_indices=categorical_indices,
             max_categorical_cardinality=max_card,
             allow_missing_numeric=True,
             allow_missing_categorical=True,
-            y_min=y_min,
-            y_max=y_max,
+            y_min=None,
+            y_max=None,
         )
 
     def _config_hash(self) -> str:

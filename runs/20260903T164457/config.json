@@ -1,0 +1,59 @@
+{
+  "created_at": "2026-09-03T16:44:57+00:00",
+  "bandwidths": [
+    0.08,
+    0.12
+  ],
+  "m_aux_values": [
+    12,
+    16
+  ],
+  "metric": "val_crps",
+  "random_seed": 10,
+  "base_config": {
+    "hidden_sizes": [
+      128,
+      128
+    ],
+    "activation": null,
+    "dropout": 0.0,
+    "positive_output": true,
+    "bandwidth": 0.1,
+    "bandwidths": null,
+    "bandwidth_strategy": "first",
+    "adaptive_bandwidth": "none",
+    "normalization_lambda": 0.0,
+    "m_aux": 32,
+    "aux_chunk_size": null,
+    "batch_size": 32,
+    "epochs": 3,
+    "lr": 0.001,
+    "weight_decay": 0.0,
+    "patience": 1,
+    "sampler": "iid",
+    "amp": false,
+    "kernel": "gaussian",
+    "loss": "mse",
+    "val_fraction": 0.2,
+    "device": "cpu",
+    "monitor_metric": "val_crps",
+    "epistemic_mode": "none",
+    "mc_samples": 10,
+    "ensemble_size": 1,
+    "reproducible": false,
+    "inference_batch_size": null,
+    "inference_grid_chunk_size": null,
+    "input_schema": null,
+    "preprocessor": {
+      "categorical_indices": null,
+      "numeric_indices": null,
+      "categorical_encoding": "onehot",
+      "handle_unknown": "use_unknown",
+      "add_missing_indicator": false
+    }
+  },
+  "data_fingerprint": {
+    "X": "c57ff68d60ab973dc95faef83983c654724730b6bbb89723b8cd0c4966c6ca38",
+    "y": "2a314fdd500e7a2aadb3d9a895efbd2658b1851cd5a16757fdc269257dac3a15"
+  }
+}

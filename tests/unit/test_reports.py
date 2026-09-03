@@ -32,8 +32,9 @@ def test_calibration_report_matches_schema() -> None:
 
 
 def test_benchmark_report_matches_schema() -> None:
+    expected_nll = 1.2
     payload = build_benchmark_report(
-        results={"dataset": {"model": {"nll": 1.2, "crps": 0.5}}},
+        results={"dataset": {"model": {"nll": expected_nll, "crps": 0.5}}},
         quick=True,
         metadata={"datasets": ["dataset"]},
     )
@@ -41,5 +42,5 @@ def test_benchmark_report_matches_schema() -> None:
     assert payload["schema_version"] == BENCHMARK_REPORT_SCHEMA_VERSION
     assert payload["schema_version"] == schema["properties"]["schema_version"]["const"]
     assert payload["quick"] is True
-    assert payload["results"]["dataset"]["model"]["nll"] == 1.2
+    assert payload["results"]["dataset"]["model"]["nll"] == expected_nll
     assert payload["metadata"]["datasets"] == ["dataset"]

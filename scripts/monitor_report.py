@@ -61,7 +61,7 @@ def _pit_values_for_dataset(
     return np.asarray(values, dtype=np.float64)
 
 
-def main() -> None:
+def main() -> None:  # noqa: PLR0914
     args = _parse_args()
     estimator = CondensiteTorchCDE.load(args.model, map_location="cpu")
     baseline = load_tabular(args.baseline, target_column=args.target, file_format=args.format)

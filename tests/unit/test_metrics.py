@@ -52,7 +52,7 @@ def test_metrics_support_row_local_grids() -> None:
         [0.0, 0.5, 0.5, 0.0],
         [0.0, 0.5, 0.5, 0.0],
     ])
-    pdf = pdf / np.trapezoid(pdf, x=grid, axis=1)[:, None]
+    pdf /= np.trapz(pdf, x=grid, axis=1)[:, None]
     cdf = np.zeros_like(pdf)
     cdf[:, 1:] = np.cumsum(
         0.5 * (pdf[:, :-1] + pdf[:, 1:]) * np.diff(grid, axis=1),

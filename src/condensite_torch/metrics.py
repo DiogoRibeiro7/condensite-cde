@@ -7,9 +7,10 @@ from numpy.typing import NDArray
 
 EPS = 1e-12
 _MIN_GRID_POINTS = 2
+_ROW_LOCAL_GRID_DIMENSION = 2
 
 
-def _validate_shapes(
+def _validate_shapes(  # noqa: PLR0912
     y_true: NDArray[np.floating],
     y_grid: NDArray[np.floating],
     values: NDArray[np.floating],
@@ -41,7 +42,7 @@ def _validate_shapes(
         if np.any(np.diff(y_grid_arr) <= 0.0):
             msg = "y_grid must be strictly increasing."
             raise ValueError(msg)
-    elif y_grid_arr.ndim == 2:
+    elif y_grid_arr.ndim == _ROW_LOCAL_GRID_DIMENSION:
         if y_grid_arr.shape[0] != n_samples:
             msg = (
                 "Row-local y_grid must have one row per target, "
@@ -71,7 +72,7 @@ def _grid_row(y_grid: NDArray[np.float64], index: int) -> NDArray[np.float64]:
     """Return the common grid or the requested row-local grid."""
     if y_grid.ndim == 1:
         return y_grid
-    return y_grid[index]
+    return np.asarray(y_grid[index], dtype=np.float64)
 
 
 def nll_from_pdf(

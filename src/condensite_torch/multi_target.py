@@ -150,8 +150,8 @@ class MultiTargetCondensite:
             estimator = self._require_shared_estimator()
             features = self._tile_with_target_indicator(X_arr)
             values = estimator.predict_quantile(features, q_arr, y_grid=y_grid, head=head)
-            stacked = values.reshape(X_arr.shape[0], self._dimension, q_arr.size)
-            return stacked[..., 0] if scalar else stacked
+            shared_values = values.reshape(X_arr.shape[0], self._dimension, q_arr.size)
+            return shared_values[..., 0] if scalar else shared_values
         per_dim = []
         for dim, estimator in enumerate(self._models):
             features = self._features_for_prediction(X_arr, y_context, dim)

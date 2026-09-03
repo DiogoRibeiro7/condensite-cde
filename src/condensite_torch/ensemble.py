@@ -83,6 +83,8 @@ class EnsembleCondensite:
         rng = np.random.default_rng(self.random_seed)
         for idx in range(self.n_models):
             config = copy.deepcopy(self.base_config)
+            if config.epistemic_mode == "ensemble":
+                config.epistemic_mode = "none"
             estimator = CondensiteTorchCDE(config=config, random_seed=self.random_seed + idx)
             if self.bootstrap:
                 indices = rng.integers(0, X_arr.shape[0], size=X_arr.shape[0])

@@ -25,16 +25,19 @@ def test_preprocessor_imputes_missing_and_orders_features() -> None:
     config = TabularPreprocessorConfig(add_missing_indicator=True)
     preprocessor = TabularPreprocessor(config).fit(data)
     transformed = preprocessor.transform(data)
-    assert transformed.shape == (data.shape[0], 8)
+    expected_feature_count = 10
+    assert transformed.shape == (data.shape[0], expected_feature_count)
     assert not np.isnan(transformed).any()
     assert preprocessor.feature_names_ == [
         "x0",
         "x0_missing",
         "x1=red",
         "x1=blue",
+        "x1=__missing__",
         "x1=__unknown__",
         "x2=cat",
         "x2=dog",
+        "x2=__missing__",
         "x2=__unknown__",
     ]
 

@@ -35,7 +35,7 @@ def make_y_grid(
         if not np.isfinite(clip_low) or not np.isfinite(clip_high) or clip_high <= clip_low:
             msg = "clip must be (low, high) with finite low < high."
             raise ValueError(msg)
-        data = np.clip(data, clip_low, clip_high)
+        data = np.asarray(np.clip(data, clip_low, clip_high), dtype=np.float64).reshape(-1)
 
     mode_lower = mode.lower()
     if mode_lower == "quantile":

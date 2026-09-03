@@ -7,6 +7,7 @@ from numpy.typing import NDArray
 
 EPS = 1e-12
 _MIN_GRID_POINTS = 2
+_EXPECTED_ARRAY_DIMENSIONS = 2
 
 
 def wasserstein_1(
@@ -17,7 +18,7 @@ def wasserstein_1(
     """Return the 1-Wasserstein distance given CDFs on the same grid."""
     cdf_arr_a, cdf_arr_b, grid = _validate_inputs(cdf_a, cdf_b, y_grid, kind="cdf")
     diff = np.abs(cdf_arr_a - cdf_arr_b)
-    integral = np.trapz(diff, x=grid, axis=-1)
+    integral = np.asarray(np.trapz(diff, x=grid, axis=-1), dtype=np.float64)
     return float(np.mean(integral))
 
 
@@ -84,7 +85,7 @@ def _validate_inputs(
     if arr_a.ndim == 1:
         arr_a = arr_a.reshape(1, -1)
         arr_b = arr_b.reshape(1, -1)
-    if arr_a.ndim != 2:
+    if arr_a.ndim != _EXPECTED_ARRAY_DIMENSIONS:
         msg = f"{kind} arrays must be 1-D or 2-D, got shape {arr_a.shape}."
         raise ValueError(msg)
     if arr_a.shape[-1] != grid.size:
@@ -113,7 +114,7 @@ def _kl_divergence(
     numerator = np.clip(p, epsilon, None)
     denominator = np.clip(q, epsilon, None)
     integrand = numerator * np.log(numerator / denominator)
-    result = np.trapz(integrand, x=y_grid, axis=-1)
+    result = np.asarray(np.trapz(integrand, x=y_grid, axis=-1), dtype=np.float64)
     return float(np.mean(result))
 
 

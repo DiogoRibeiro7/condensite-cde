@@ -34,7 +34,7 @@ def test_cross_validate_reports_means_and_stds() -> None:
         seed=2,
     )
     assert set(result.metrics_mean) == {"nll", "crps", "coverage"}
-    assert len(result.folds) == 3
+    assert len(result.folds) == result.metadata["cv"]
     manual_mean = float(np.mean([fold.metrics["nll"] for fold in result.folds]))
     assert pytest.approx(result.metrics_mean["nll"], rel=1e-12) == manual_mean
     manual_std = float(np.std([fold.metrics["nll"] for fold in result.folds], ddof=0))
