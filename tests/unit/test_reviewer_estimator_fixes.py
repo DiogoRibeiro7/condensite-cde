@@ -51,7 +51,9 @@ def test_mc_dropout_enables_dropout_and_restores_eval_mode() -> None:
     estimator = CondensiteTorchCDE(config=config, random_seed=7).fit(X, y)
     assert estimator.model is not None
 
-    dropout_modules = [module for module in estimator.model.modules() if isinstance(module, nn.Dropout)]
+    dropout_modules = [
+        module for module in estimator.model.modules() if isinstance(module, nn.Dropout)
+    ]
     assert dropout_modules
     observed_modes: list[bool] = []
     handles = [
