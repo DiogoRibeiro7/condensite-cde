@@ -27,13 +27,13 @@ jobs:
         run: pip install poetry==2.2.1
       - name: Install dependencies
         run: poetry install --no-interaction
-      - name: Normalize applicator replacement cardinality
+      - name: Generate source and test fixes
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          path = Path("scripts/apply_final_review_fixes.py")
-          text = path.read_text(encoding="utf-8")
+          applicator = Path("scripts/apply_final_review_fixes.py")
+          text = applicator.read_text(encoding="utf-8")
           old = '    _replace(path, "np.trapezoid", "np.trapz")\n'
           new = (
               '    target = Path(path)\n'
@@ -42,39 +42,189 @@ jobs:
           )
           if old not in text:
               raise RuntimeError("Expected trapezoid replacement call was not found")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          applicator.write_text(text.replace(old, new, 1), encoding="utf-8")
           PY
-      - name: Generate source and test fixes
-        run: python scripts/apply_final_review_fixes.py
-      - name: Finish target-range cleanup
+          python scripts/apply_final_review_fixes.py
+      - name: Apply final typing and import fixes
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          path = Path("src/condensite_torch/estimator.py")
-          text = path.read_text(encoding="utf-8")
-          text = text.replace(
+          def replace(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              if old not in text:
+                  raise RuntimeError(f"Missing expected text in {path}: {old[:80]!r}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          replace(
+              "src/condensite_torch/estimator.py",
               "        y_min = float(np.min(y)) if y.size else None\n"
               "        y_max = float(np.max(y)) if y.size else None\n",
               "",
+          )
+          replace(
+              "src/condensite_torch/metrics.py",
+              "    return y_grid[index]\n",
+              "    return np.asarray(y_grid[index], dtype=np.float64)\n",
+          )
+          replace(
+              "src/condensite_torch/distribution_metrics.py",
+              "    integral = np.trapz(diff, x=grid, axis=-1)\n"
+              "    return float(np.mean(integral))\n",
+              "    integral = np.asarray(np.trapz(diff, x=grid, axis=-1), dtype=np.float64)\n"
+              "    return float(np.mean(integral))\n",
+          )
+          replace(
+              "src/condensite_torch/distribution_metrics.py",
+              "    result = np.trapz(integrand, x=y_grid, axis=-1)\n"
+              "    return float(np.mean(result))\n",
+              "    result = np.asarray(np.trapz(integrand, x=y_grid, axis=-1), dtype=np.float64)\n"
+              "    return float(np.mean(result))\n",
+          )
+          replace(
+              "src/condensite_cde/grids.py",
+              "        data = np.clip(data, clip_low, clip_high)\n",
+              "        data = np.asarray(np.clip(data, clip_low, clip_high), dtype=np.float64).reshape(-1)\n",
+          )
+          replace(
+              "src/condensite_torch/multi_target.py",
+              "            stacked = values.reshape(X_arr.shape[0], self._dimension, q_arr.size)\n"
+              "            return stacked[..., 0] if scalar else stacked\n",
+              "            shared_values = values.reshape(X_arr.shape[0], self._dimension, q_arr.size)\n"
+              "            return shared_values[..., 0] if scalar else shared_values\n",
+          )
+          replace(
+              "src/condensite_cde/tune.py",
+              "    if is_dataclass(value):\n"
+              "        return _clean_value(asdict(value))\n",
+              "    if is_dataclass(value) and not isinstance(value, type):\n"
+              "        return _clean_value(asdict(value))\n",
+          )
+          replace(
+              "src/condensite_cde/tune.py",
+              "    return json.loads(path.read_text(encoding=\"utf-8\"))\n",
+              "    return cast(list[dict[str, Any]], json.loads(path.read_text(encoding=\"utf-8\")))\n",
+          )
+
+          path = Path("src/condensite_cde/adapters.py")
+          text = path.read_text(encoding="utf-8")
+          text = text.replace("from typing import Any\n", "from typing import Any, cast\n", 1)
+          text = text.replace("    pd = None  # type: ignore[assignment]\n", "    pd = None\n", 1)
+          text = text.replace(
+              "        self.grid_mode: GridMode = mode  # type: ignore[assignment]\n",
+              "        self.grid_mode = cast(GridMode, mode)\n",
+              1,
+          )
+          text = text.replace(
+              "        self._estimator.fit(X, y)\n",
+              "        self._estimator.fit(X, y)  # type: ignore[arg-type]\n",
+              1,
+          )
+          text = text.replace(
+              "        return np.trapz(weighted, x=grid_arr, axis=1)\n",
+              "        return np.asarray(np.trapz(weighted, x=grid_arr, axis=1), dtype=np.float64)\n",
+              1,
+          )
+          text = text.replace(
+              "                self.grid_mode = mode  # type: ignore[assignment]\n",
+              "                self.grid_mode = cast(GridMode, mode)\n",
+              1,
+          )
+          text = text.replace(
+              "            grid_mode=str(state.get(\"grid_mode\", \"quantile\")),\n",
+              "            grid_mode=cast(GridMode, str(state.get(\"grid_mode\", \"quantile\"))),\n",
+          )
+          text = text.replace(
+              "        return frame[self._feature_columns].to_numpy(dtype=object, copy=False)\n",
+              "        return np.asarray(\n"
+              "            frame[self._feature_columns].to_numpy(dtype=object, copy=False), dtype=object\n"
+              "        )\n",
+              1,
+          )
+          text = text.replace("  # type: ignore[arg-type]", "")
+          text = text.replace("        return target  # type: ignore[return-value]\n", "        return target\n", 1)
+          text = text.replace(
+              "            columns = (\n"
+              "                grid_arr if grid_arr.ndim == 1 else [f\"y_{idx}\" for idx in range(density.shape[1])]\n"
+              "            )\n",
+              "            columns: list[Any] = (\n"
+              "                grid_arr.tolist()\n"
+              "                if grid_arr.ndim == 1\n"
+              "                else [f\"y_{idx}\" for idx in range(density.shape[1])]\n"
+              "            )\n",
               1,
           )
           path.write_text(text, encoding="utf-8")
+
+          Path("src/condensite_cde/__init__.py").write_text(
+              '''"""Utility helpers shared across Condensite implementations."""\n\n'''
+              '''from __future__ import annotations\n\n'''
+              '''from importlib import import_module\n'''
+              '''from typing import TYPE_CHECKING\n\n'''
+              '''_LAZY_IMPORTS: dict[str, tuple[str, str]] = {\n'''
+              '''    "PandasCondensiteAdapter": ("condensite_cde.adapters", "PandasCondensiteAdapter"),\n'''
+              '''    "SklearnCondensiteRegressor": ("condensite_cde.adapters", "SklearnCondensiteRegressor"),\n'''
+              '''    "CrossValidationResult": ("condensite_cde.cv", "CrossValidationResult"),\n'''
+              '''    "FoldMetrics": ("condensite_cde.cv", "FoldMetrics"),\n'''
+              '''    "cross_validate": ("condensite_cde.cv", "cross_validate"),\n'''
+              '''    "make_y_grid": ("condensite_cde.grids", "make_y_grid"),\n'''
+              '''    "build_benchmark_report": ("condensite_cde.reports", "build_benchmark_report"),\n'''
+              '''    "build_calibration_report": ("condensite_cde.reports", "build_calibration_report"),\n'''
+              '''    "TuneResult": ("condensite_cde.tune", "TuneResult"),\n'''
+              '''    "tune_bandwidth_m_aux": ("condensite_cde.tune", "tune_bandwidth_m_aux"),\n'''
+              '''}\n\n'''
+              '''def __getattr__(name: str) -> object:\n'''
+              '''    target = _LAZY_IMPORTS.get(name)\n'''
+              '''    if target is None:\n'''
+              '''        msg = f"module {__name__!r} has no attribute {name!r}"\n'''
+              '''        raise AttributeError(msg)\n'''
+              '''    module_name, attr_name = target\n'''
+              '''    module = import_module(module_name)\n'''
+              '''    value = getattr(module, attr_name)\n'''
+              '''    globals()[name] = value\n'''
+              '''    return value\n\n'''
+              '''def __dir__() -> list[str]:\n'''
+              '''    return sorted({*globals().keys(), *_LAZY_IMPORTS.keys()})\n\n'''
+              '''if TYPE_CHECKING:\n'''
+              '''    from .adapters import PandasCondensiteAdapter, SklearnCondensiteRegressor\n'''
+              '''    from .cv import CrossValidationResult, FoldMetrics, cross_validate\n'''
+              '''    from .grids import make_y_grid\n'''
+              '''    from .reports import build_benchmark_report, build_calibration_report\n'''
+              '''    from .tune import TuneResult, tune_bandwidth_m_aux\n\n'''
+              '''__all__ = (\n'''
+              '''    "CrossValidationResult",\n'''
+              '''    "FoldMetrics",\n'''
+              '''    "PandasCondensiteAdapter",\n'''
+              '''    "SklearnCondensiteRegressor",\n'''
+              '''    "TuneResult",\n'''
+              '''    "build_benchmark_report",\n'''
+              '''    "build_calibration_report",\n'''
+              '''    "cross_validate",\n'''
+              '''    "make_y_grid",\n'''
+              '''    "tune_bandwidth_m_aux",\n'''
+              ''')\n''',
+              encoding="utf-8",
+          )
           PY
       - name: Remove scaffolding from generated tree
         run: |
           rm scripts/apply_final_review_fixes.py
           rm .github/workflows/apply-final-review-fixes.yml
-      - name: Format and lint generated tree
+      - name: Validate generated final tree
         run: |
           poetry run ruff format .
           poetry run ruff check .
-      - name: Package generated files
+          poetry run mypy
+          poetry run pytest -q
+      - name: Package validated files
         run: |
           tar -czf /tmp/final-review-files.tar.gz \
             scripts/monitor_report.py \
+            src/condensite_cde/__init__.py \
             src/condensite_cde/adapters.py \
             src/condensite_cde/cv.py \
+            src/condensite_cde/grids.py \
             src/condensite_cde/reports.py \
             src/condensite_cde/tune.py \
             src/condensite_torch/datasets.py \
@@ -83,6 +233,7 @@ jobs:
             src/condensite_torch/estimator.py \
             src/condensite_torch/metrics.py \
             src/condensite_torch/monitoring.py \
+            src/condensite_torch/multi_target.py \
             tests/test_adapters.py \
             tests/test_cross_validation.py \
             tests/test_metrics.py \
@@ -90,13 +241,8 @@ jobs:
             tests/unit/test_monitoring.py \
             tests/unit/test_reports.py \
             tests/unit/test_reviewer_estimator_fixes.py
-      - name: Upload generated files
+      - name: Upload validated files
         uses: actions/upload-artifact@v4
         with:
           name: final-review-files
           path: /tmp/final-review-files.tar.gz
-      - name: Type check generated tree
-        run: poetry run mypy
-      - name: Full tests
-        if: always()
-        run: poetry run pytest -q
