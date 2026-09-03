@@ -1,0 +1,270 @@
+"""Apply the last validated PR #14 fixes before deleting temporary scaffolding."""
+
+from __future__ import annotations
+
+import json
+import runpy
+import sys
+from pathlib import Path
+
+import numpy as np
+
+
+def _replace(path: str, old: str, new: str, *, count: int = 1) -> None:
+    target = Path(path)
+    text = target.read_text(encoding="utf-8")
+    if old not in text:
+        raise RuntimeError(f"Missing expected text in {path}: {old[:100]!r}")
+    target.write_text(text.replace(old, new, count), encoding="utf-8")
+
+
+def _run_base_applicator() -> None:
+    path = Path("scripts/apply_final_review_fixes.py")
+    text = path.read_text(encoding="utf-8")
+    old = '    _replace(path, "np.trapezoid", "np.trapz")\n'
+    new = (
+        '    target = Path(path)\n'
+        '    text = target.read_text(encoding="utf-8")\n'
+        '    target.write_text(text.replace("np.trapezoid", "np.trapz"), encoding="utf-8")\n'
+    )
+    if old not in text:
+        raise RuntimeError("Expected trapezoid replacement call was not found")
+    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+    namespace = runpy.run_path(str(path))
+    namespace["main"]()
+
+
+def _fix_estimator_and_typing() -> None:
+    _replace(
+        "src/condensite_torch/estimator.py",
+        "        y_min = float(np.min(y)) if y.size else None\n"
+        "        y_max = float(np.max(y)) if y.size else None\n",
+        "",
+    )
+    _replace(
+        "src/condensite_torch/estimator.py",
+        "    @staticmethod\n"
+        "    def _combine_features(X_batch: Tensor, y_prime_chunk: Tensor) -> Tensor:\n",
+        "    def _combine_features(self, X_batch: Tensor, y_prime_chunk: Tensor) -> Tensor:  # noqa: PLR6301\n",
+    )
+    _replace(
+        "src/condensite_torch/metrics.py",
+        "    return y_grid[index]\n",
+        "    return np.asarray(y_grid[index], dtype=np.float64)\n",
+    )
+    _replace(
+        "src/condensite_torch/distribution_metrics.py",
+        "    integral = np.trapz(diff, x=grid, axis=-1)\n"
+        "    return float(np.mean(integral))\n",
+        "    integral = np.asarray(np.trapz(diff, x=grid, axis=-1), dtype=np.float64)\n"
+        "    return float(np.mean(integral))\n",
+    )
+    _replace(
+        "src/condensite_torch/distribution_metrics.py",
+        "    result = np.trapz(integrand, x=y_grid, axis=-1)\n"
+        "    return float(np.mean(result))\n",
+        "    result = np.asarray(np.trapz(integrand, x=y_grid, axis=-1), dtype=np.float64)\n"
+        "    return float(np.mean(result))\n",
+    )
+    _replace(
+        "src/condensite_cde/grids.py",
+        "        data = np.clip(data, clip_low, clip_high)\n",
+        "        data = np.asarray(np.clip(data, clip_low, clip_high), dtype=np.float64).reshape(-1)\n",
+    )
+    _replace(
+        "src/condensite_torch/multi_target.py",
+        "            stacked = values.reshape(X_arr.shape[0], self._dimension, q_arr.size)\n"
+        "            return stacked[..., 0] if scalar else stacked\n",
+        "            shared_values = values.reshape(X_arr.shape[0], self._dimension, q_arr.size)\n"
+        "            return shared_values[..., 0] if scalar else shared_values\n",
+    )
+    _replace(
+        "src/condensite_cde/tune.py",
+        "    if is_dataclass(value):\n"
+        "        return _clean_value(asdict(value))\n",
+        "    if is_dataclass(value) and not isinstance(value, type):\n"
+        "        return _clean_value(asdict(value))\n",
+    )
+    _replace(
+        "src/condensite_cde/tune.py",
+        "    return json.loads(path.read_text(encoding=\"utf-8\"))\n",
+        "    return cast(list[dict[str, Any]], json.loads(path.read_text(encoding=\"utf-8\")))\n",
+    )
+
+
+def _fix_adapters() -> None:
+    path = Path("src/condensite_cde/adapters.py")
+    text = path.read_text(encoding="utf-8")
+    text = text.replace("from typing import Any\n", "from typing import Any, cast\n", 1)
+    text = text.replace("    pd = None  # type: ignore[assignment]\n", "    pd = None\n", 1)
+    text = text.replace(
+        "        self.grid_mode: GridMode = mode  # type: ignore[assignment]\n",
+        "        self.grid_mode = cast(GridMode, mode)\n",
+        1,
+    )
+    text = text.replace(
+        "        self._estimator.fit(X, y)\n",
+        "        self._estimator.fit(X, y)  # type: ignore[arg-type]\n",
+        1,
+    )
+    text = text.replace(
+        "        return np.trapz(weighted, x=grid_arr, axis=1)\n",
+        "        return np.asarray(np.trapz(weighted, x=grid_arr, axis=1), dtype=np.float64)\n",
+        1,
+    )
+    text = text.replace(
+        "                self.grid_mode = mode  # type: ignore[assignment]\n",
+        "                self.grid_mode = cast(GridMode, mode)\n",
+        1,
+    )
+    text = text.replace(
+        '            grid_mode=str(state.get("grid_mode", "quantile")),\n',
+        '            grid_mode=cast(GridMode, str(state.get("grid_mode", "quantile"))),\n',
+    )
+    text = text.replace(
+        "        return frame[self._feature_columns].to_numpy(dtype=object, copy=False)\n",
+        "        return np.asarray(\n"
+        "            frame[self._feature_columns].to_numpy(dtype=object, copy=False), dtype=object\n"
+        "        )\n",
+        1,
+    )
+    text = text.replace(
+        "        if not isinstance(data, pd.DataFrame):  # type: ignore[arg-type]\n",
+        "        if not isinstance(data, pd.DataFrame):\n",
+    )
+    text = text.replace("        return target  # type: ignore[return-value]\n", "        return target\n", 1)
+    text = text.replace(
+        "            columns = (\n"
+        '                grid_arr if grid_arr.ndim == 1 else [f"y_{idx}" for idx in range(density.shape[1])]\n'
+        "            )\n",
+        "            columns = (\n"
+        "                grid_arr.tolist()\n"
+        "                if grid_arr.ndim == 1\n"
+        '                else [f"y_{idx}" for idx in range(density.shape[1])]\n'
+        "            )\n",
+        1,
+    )
+    path.write_text(text, encoding="utf-8")
+
+
+def _write_lazy_package_init() -> None:
+    Path("src/condensite_cde/__init__.py").write_text(
+        '''"""Utility helpers shared across Condensite implementations."""\n\n'''
+        '''from __future__ import annotations\n\n'''
+        '''from importlib import import_module\n'''
+        '''from typing import TYPE_CHECKING\n\n'''
+        '''_LAZY_IMPORTS: dict[str, tuple[str, str]] = {\n'''
+        '''    "PandasCondensiteAdapter": ("condensite_cde.adapters", "PandasCondensiteAdapter"),\n'''
+        '''    "SklearnCondensiteRegressor": ("condensite_cde.adapters", "SklearnCondensiteRegressor"),\n'''
+        '''    "CrossValidationResult": ("condensite_cde.cv", "CrossValidationResult"),\n'''
+        '''    "FoldMetrics": ("condensite_cde.cv", "FoldMetrics"),\n'''
+        '''    "cross_validate": ("condensite_cde.cv", "cross_validate"),\n'''
+        '''    "make_y_grid": ("condensite_cde.grids", "make_y_grid"),\n'''
+        '''    "build_benchmark_report": ("condensite_cde.reports", "build_benchmark_report"),\n'''
+        '''    "build_calibration_report": ("condensite_cde.reports", "build_calibration_report"),\n'''
+        '''    "TuneResult": ("condensite_cde.tune", "TuneResult"),\n'''
+        '''    "tune_bandwidth_m_aux": ("condensite_cde.tune", "tune_bandwidth_m_aux"),\n'''
+        '''}\n\n'''
+        '''def __getattr__(name: str) -> object:\n'''
+        '''    target = _LAZY_IMPORTS.get(name)\n'''
+        '''    if target is None:\n'''
+        '''        msg = f"module {__name__!r} has no attribute {name!r}"\n'''
+        '''        raise AttributeError(msg)\n'''
+        '''    module_name, attr_name = target\n'''
+        '''    module = import_module(module_name)\n'''
+        '''    value = getattr(module, attr_name)\n'''
+        '''    globals()[name] = value\n'''
+        '''    return value\n\n'''
+        '''def __dir__() -> list[str]:\n'''
+        '''    return sorted({*globals().keys(), *_LAZY_IMPORTS.keys()})\n\n'''
+        '''if TYPE_CHECKING:\n'''
+        '''    from .adapters import PandasCondensiteAdapter, SklearnCondensiteRegressor\n'''
+        '''    from .cv import CrossValidationResult, FoldMetrics, cross_validate\n'''
+        '''    from .grids import make_y_grid\n'''
+        '''    from .reports import build_benchmark_report, build_calibration_report\n'''
+        '''    from .tune import TuneResult, tune_bandwidth_m_aux\n\n'''
+        '''__all__ = (\n'''
+        '''    "CrossValidationResult",\n'''
+        '''    "FoldMetrics",\n'''
+        '''    "PandasCondensiteAdapter",\n'''
+        '''    "SklearnCondensiteRegressor",\n'''
+        '''    "TuneResult",\n'''
+        '''    "build_benchmark_report",\n'''
+        '''    "build_calibration_report",\n'''
+        '''    "cross_validate",\n'''
+        '''    "make_y_grid",\n'''
+        '''    "tune_bandwidth_m_aux",\n'''
+        ''')\n''',
+        encoding="utf-8",
+    )
+
+
+def _fix_tests_and_snapshots() -> None:
+    reviewer_path = Path("tests/unit/test_reviewer_estimator_fixes.py")
+    reviewer = reviewer_path.read_text(encoding="utf-8")
+    reviewer = reviewer.replace(
+        "from condensite_torch import CondensiteTorchCDE, CondensiteTorchCDEConfig\n",
+        "from condensite_torch import CondensiteTorchCDE, CondensiteTorchCDEConfig\n"
+        "from condensite_torch.scalers import MinMaxScaler1D, StandardScaler\n",
+        1,
+    )
+    reviewer = reviewer.replace(
+        "    estimator._fitted = True\n"
+        "    estimator.model = nn.Sequential(nn.Dropout(p=0.5), nn.Linear(1, 1))\n",
+        "    estimator._fitted = True\n"
+        "    estimator.model = nn.Sequential(nn.Dropout(p=0.5), nn.Linear(1, 1))\n"
+        "    estimator.x_scaler = StandardScaler().fit(np.zeros((rows, 1), dtype=np.float64))\n"
+        "    estimator.y_scaler = MinMaxScaler1D().fit(np.array([-1.0, 1.0], dtype=np.float64))\n",
+        1,
+    )
+    reviewer_path.write_text(reviewer, encoding="utf-8")
+
+    _replace(
+        "tests/unit/test_preprocessing.py",
+        "    assert transformed.shape == (data.shape[0], 8)\n",
+        "    expected_feature_count = 10\n"
+        "    assert transformed.shape == (data.shape[0], expected_feature_count)\n",
+    )
+    _replace(
+        "tests/unit/test_preprocessing.py",
+        '        "x1=blue",\n'
+        '        "x1=__unknown__",\n'
+        '        "x2=cat",\n'
+        '        "x2=dog",\n'
+        '        "x2=__unknown__",\n',
+        '        "x1=blue",\n'
+        '        "x1=__missing__",\n'
+        '        "x1=__unknown__",\n'
+        '        "x2=cat",\n'
+        '        "x2=dog",\n'
+        '        "x2=__missing__",\n'
+        '        "x2=__unknown__",\n',
+    )
+
+    sys.path.insert(0, "src")
+    from condensite_torch.metrics import nll_from_pdf
+
+    rng = np.random.default_rng(42)
+    x = rng.normal(size=(192, 2))
+    y = 0.4 * np.sin(x[:, 0]) - 0.25 * x[:, 1] + 0.15 * rng.normal(size=192)
+    y_test = y[int(0.75 * 192) :]
+    metrics_path = Path("tests/regression/baselines/baseline_metrics.json")
+    payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+    for dtype_name in ("float32", "float64"):
+        bundle = np.load(f"tests/regression/baselines/baseline_{dtype_name}.npz")
+        grid = bundle["y_grid"].astype(np.float64)
+        pdf = bundle["pdf"].astype(np.float64)
+        payload["snapshots"][dtype_name]["nll"] = float(nll_from_pdf(y_test, grid, pdf))
+    metrics_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def main() -> None:
+    _run_base_applicator()
+    _fix_estimator_and_typing()
+    _fix_adapters()
+    _write_lazy_package_init()
+    _fix_tests_and_snapshots()
+
+
+if __name__ == "__main__":
+    main()
