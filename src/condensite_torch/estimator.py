@@ -189,8 +189,6 @@ class CondensiteTorchCDE:
 
         self._local_grid_cache.clear()
         self._set_bandwidths()
-        self._y_train = y_arr.copy()
-        self._data_schema = self._summarize_data_schema(X_arr, y_arr)
         self._version_info = self._environment_versions()
         start_time = time.perf_counter()
 
@@ -201,25 +199,14 @@ class CondensiteTorchCDE:
             np.random.seed(self.random_seed)
             random.seed(self.random_seed)
 
-        if self.config.preprocessor is not None:
-            self.preprocessor = TabularPreprocessor(self.config.preprocessor)
-        else:
-            self.preprocessor = None
-        X_features = self._fit_preprocessor(X_arr)
-        self.y_scaler = MinMaxScaler1D().fit(y_arr)
-        derived_schema = self._schema_from_training(X_arr, y_arr)
-        self._schema_constraints = self._merge_schema_constraints(
-            self._schema_constraints,
-            derived_schema,
-        )
-
-        X_scaled: NDArray[np.float32] = X_features.astype(np.float32)
-        y_scaled: NDArray[np.float32] = self.y_scaler.transform(y_arr)
-
-        val_eval_data: tuple[NDArray[np.float64], NDArray[np.float64]] | None = None
+        val_eval_data: tuple[NDArray[np.object_], NDArray[np.float64]] | None = None
+        X_train_arr = X_arr
+        y_train_arr = y_arr
         if X_val is None or y_val is None:
-            X_train_scaled, y_train_scaled, val_idx = self._train_val_split(X_scaled, y_scaled)
+            train_idx, val_idx = self._train_val_indices(X_arr.shape[0])
             if val_idx is not None and val_idx.size > 0:
+                X_train_arr = X_arr[train_idx]
+                y_train_arr = y_arr[train_idx]
                 val_eval_data = (X_arr[val_idx], y_arr[val_idx])
         else:
             X_val_arr = np.asarray(X_val, dtype=object)
@@ -227,18 +214,32 @@ class CondensiteTorchCDE:
             if X_val_arr.shape[0] != y_val_arr.shape[0]:
                 msg = "Validation X and y must match in the first dimension."
                 raise ValueError(msg)
-            self._transform_with_preprocessor(X_val_arr)  # Validate shape
-            self.y_scaler.transform(y_val_arr)
-            X_train_scaled, y_train_scaled = X_scaled, y_scaled
             if X_val_arr.size > 0:
                 val_eval_data = (X_val_arr, y_val_arr)
-            else:
-                val_eval_data = None
+
+        self._y_train = y_train_arr.copy()
+        self._data_schema = self._summarize_data_schema(X_train_arr, y_train_arr)
+        if self.config.preprocessor is not None:
+            self.preprocessor = TabularPreprocessor(self.config.preprocessor)
+        else:
+            self.preprocessor = None
+        X_train_scaled = self._fit_preprocessor(X_train_arr).astype(np.float32)
+        self.y_scaler = MinMaxScaler1D().fit(y_train_arr)
+        y_train_scaled = self.y_scaler.transform(y_train_arr)
+        derived_schema = self._schema_from_training(X_train_arr, y_train_arr)
+        self._schema_constraints = self._merge_schema_constraints(
+            self._schema_constraints,
+            derived_schema,
+        )
+        if val_eval_data is not None:
+            X_val_eval, y_val_eval = val_eval_data
+            self._transform_with_preprocessor(X_val_eval)
+            self.y_scaler.transform(y_val_eval)
 
         train_loader = self._build_loader(X_train_scaled, y_train_scaled, shuffle=True)
         self._configure_importance_sampler(y_train_scaled)
 
-        x_dim = X_scaled.shape[1]
+        x_dim = X_train_scaled.shape[1]
         if self.config.adaptive_bandwidth == "x":
             self.bandwidth_net = self._build_bandwidth_net(x_dim)
         else:
@@ -334,22 +335,20 @@ class CondensiteTorchCDE:
         )
         return self
 
-    def _train_val_split(
+    def _train_val_indices(
         self,
-        X: NDArray[np.float32],
-        y: NDArray[np.float32],
-    ) -> tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.int64] | None]:
-        if self.config.val_fraction <= 0.0 or X.shape[0] <= 1:
-            return X, y, None
-        n_samples = X.shape[0]
+        n_samples: int,
+    ) -> tuple[NDArray[np.int64], NDArray[np.int64] | None]:
+        indices = np.arange(n_samples, dtype=np.int64)
+        if self.config.val_fraction <= 0.0 or n_samples <= 1:
+            return indices, None
         n_val = max(1, int(n_samples * self.config.val_fraction))
         if n_val >= n_samples:
             n_val = n_samples - 1
-        indices = np.arange(n_samples)
         self._rng.shuffle(indices)
         val_idx = indices[:n_val]
         train_idx = indices[n_val:]
-        return X[train_idx], y[train_idx], val_idx
+        return train_idx, val_idx
 
     def _build_loader(
         self,
@@ -492,7 +491,7 @@ class CondensiteTorchCDE:
 
     def _predict_density_internal(  # noqa: PLR0914
         self,
-        X: NDArray[np.floating],
+        X: NDArray[np.object_] | NDArray[np.floating],
         y_grid: NDArray[np.floating],
         *,
         head: int | str | None = None,
@@ -743,10 +742,11 @@ class CondensiteTorchCDE:
         grid_arr = self._validate_y_grid(y_grid) if y_grid is not None else self._default_y_grid()
         pdf = self.predict_density(X, grid_arr, head=head)
         cdf = self._cdf_from_pdf(pdf, grid_arr)
+        quantile_probability = alpha_value if side_norm == "right" else 1.0 - alpha_value
         quantiles = self._quantiles_from_cdf(
             cdf,
             grid_arr,
-            np.array([alpha_value], dtype=np.float64),
+            np.array([quantile_probability], dtype=np.float64),
         )
         thresholds = quantiles[:, 0]
         es = np.empty(pdf.shape[0], dtype=np.float64)
@@ -1318,7 +1318,11 @@ class CondensiteTorchCDE:
 
     def _determine_best_head(
         self,
-        val_eval_data: tuple[NDArray[np.float64], NDArray[np.float64]] | None,
+        val_eval_data: tuple[
+            NDArray[np.object_] | NDArray[np.floating],
+            NDArray[np.float64],
+        ]
+        | None,
         y_grid: NDArray[np.float64] | None,
     ) -> None:
         if val_eval_data is None or y_grid is None or len(self._bandwidths) <= 1:
