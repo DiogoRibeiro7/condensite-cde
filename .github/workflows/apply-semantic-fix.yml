@@ -29,6 +29,8 @@ jobs:
         run: poetry install --no-interaction
       - name: Apply semantic repair
         run: poetry run python scripts/apply_semantic_fix.py
+      - name: Normalize generated imports
+        run: poetry run ruff check --fix tests/test_condensite_cde.py
       - name: Remove temporary patch files
         run: |
           rm scripts/apply_semantic_fix.py
