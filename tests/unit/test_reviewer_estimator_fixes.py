@@ -75,3 +75,40 @@ def test_mc_dropout_enables_dropout_and_restores_eval_mode() -> None:
     assert observed_modes
     assert all(observed_modes)
     assert estimator.model.training is False
+
+
+def test_internal_validation_split_fits_preprocessing_on_training_rows_only() -> None:
+    y = np.linspace(0.0, 9.0, 10)
+    config = CondensiteTorchCDEConfig(
+        hidden_sizes=(4,),
+        epochs=1,
+        patience=1,
+        batch_size=4,
+        m_aux=4,
+        val_fraction=0.2,
+    )
+    probe = CondensiteTorchCDE(config=config, random_seed=3)
+    train_idx, val_idx = probe._train_val_indices(len(y))
+    assert val_idx is not None
+
+    X = np.empty((10, 2), dtype=object)
+    X[:, 0] = np.arange(10, dtype=np.float64)
+    X[:, 1] = "train"
+    X[val_idx, 1] = "heldout-only"
+
+    estimator = CondensiteTorchCDE(config=config, random_seed=3)
+    estimator.fit(X, y)
+
+    assert estimator.preprocessor is not None
+    categories = estimator.preprocessor.categorical_categories_[1]
+    assert "heldout-only" not in categories
+    assert "__unknown__" in categories
+    assert estimator.x_scaler is not None
+    train_numeric = np.asarray(X[train_idx, 0], dtype=np.float64)
+    assert estimator.x_scaler.mean_[0] == pytest.approx(float(train_numeric.mean()))
+    assert estimator.y_scaler is not None
+    assert estimator._y_train is not None
+    assert estimator.y_scaler.min_ == pytest.approx(float(y[train_idx].min()))
+    assert estimator.y_scaler.max_ == pytest.approx(float(y[train_idx].max()))
+    np.testing.assert_array_equal(np.sort(estimator._y_train), np.sort(y[train_idx]))
+    assert not np.any(np.isin(y[val_idx], estimator._y_train))

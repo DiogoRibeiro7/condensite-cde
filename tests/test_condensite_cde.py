@@ -10,6 +10,7 @@ try:
 except OSError as exc:  # pragma: no cover - depends on runner environment
     pytest.skip(f"Torch unavailable: {exc}", allow_module_level=True)
 
+import condensite_torch.estimator as estimator_module
 from condensite_torch import (
     CondensiteTorchCDE,
     CondensiteTorchCDEConfig,
@@ -21,40 +22,6 @@ from condensite_torch.aux_sampling import ImportanceSampler
 
 CDF_MONOTONIC_TOL = 1e-4
 MONOTONIC_TOL = 1e-6
-
-
-def _mean_integral_error(
-    estimator: CondensiteTorchCDE,
-    X: np.ndarray,
-    y_grid: np.ndarray,
-) -> float:
-    assert estimator.model is not None
-    assert estimator.x_scaler is not None
-    assert estimator.y_scaler is not None
-    x_scaled = estimator.x_scaler.transform(X)
-    y_scaled = estimator.y_scaler.transform(y_grid)
-    x_tensor = torch.from_numpy(x_scaled).to(estimator._device)
-    y_tensor = torch.from_numpy(y_scaled).to(estimator._device)
-    grid_size = y_tensor.shape[0]
-    with torch.no_grad():
-        x_expanded = x_tensor.unsqueeze(1).expand(-1, grid_size, -1)
-        y_expanded = y_tensor.unsqueeze(0).expand(x_tensor.shape[0], -1).unsqueeze(-1)
-        features = torch.cat([x_expanded, y_expanded], dim=-1).reshape(
-            -1,
-            x_tensor.shape[1] + 1,
-        )
-        preds = estimator.model(features).reshape(
-            x_tensor.shape[0],
-            grid_size,
-            len(estimator._bandwidths),
-        )
-    pdf_scaled = preds.detach().cpu().numpy().astype(np.float64, copy=False)
-    scale = max(float(estimator.y_scaler.data_range_), 1e-8)
-    density_heads = pdf_scaled / scale
-    if not estimator.config.positive_output:
-        density_heads = np.clip(density_heads, 0.0, None)
-    integrals = np.trapezoid(density_heads, x=y_grid, axis=1)
-    return float(np.mean(np.abs(integrals - 1.0)))
 
 
 def test_importance_sampler_is_deterministic() -> None:
@@ -224,40 +191,33 @@ def test_adaptive_bandwidth_option_produces_positive_values() -> None:
     assert torch.all(positives > 0)
 
 
-def test_normalization_regularizer_reduces_integral_error() -> None:
-    rng = np.random.default_rng(19)
-    X = rng.normal(size=(96, 3))
-    y = 0.4 * X[:, 0] - 0.3 * X[:, 1] + 0.25 * np.sin(X[:, 2]) + 0.1 * rng.normal(size=X.shape[0])
-    grid = np.linspace(y.min() - 0.5, y.max() + 0.5, 64)
-    base_config = CondensiteTorchCDEConfig(
-        hidden_sizes=(20, 20),
-        m_aux=6,
-        epochs=6,
-        patience=2,
-        batch_size=32,
-        lr=3e-3,
-        bandwidth=0.1,
-        sampler="sobol",
+def test_normalization_regularizer_penalty_tracks_mass_error() -> None:
+    accumulator = estimator_module._NormalizationAccumulator(
+        batch_size=3,
+        num_heads=1,
+        device=torch.device("cpu"),
     )
-    penalized_config = CondensiteTorchCDEConfig(
-        hidden_sizes=(20, 20),
-        m_aux=6,
-        epochs=6,
-        patience=2,
-        batch_size=32,
-        lr=3e-3,
-        bandwidth=0.1,
-        sampler="sobol",
-        normalization_lambda=0.5,
+    predictions = torch.tensor(
+        [
+            [[1.0], [1.0]],
+            [[0.5], [0.5]],
+            [[1.5], [1.5]],
+        ],
+        dtype=torch.float32,
+        requires_grad=True,
     )
-    base_errors = []
-    penalized_errors = []
-    for seed in (3, 4):
-        baseline = CondensiteTorchCDE(config=base_config, random_seed=seed).fit(X, y)
-        penalized = CondensiteTorchCDE(config=penalized_config, random_seed=seed).fit(X, y)
-        base_errors.append(_mean_integral_error(baseline, X[:12], grid))
-        penalized_errors.append(_mean_integral_error(penalized, X[:12], grid))
-    assert np.mean(penalized_errors) <= np.mean(base_errors)
+    weights = torch.ones((3, 2, 1), dtype=torch.float32)
+
+    accumulator.accumulate(predictions, weights)
+    penalty = accumulator.penalty()
+
+    assert float(penalty.detach()) == pytest.approx(1.0 / 6.0)
+    penalty.backward()
+    assert predictions.grad is not None
+    gradients = predictions.grad.detach().cpu().numpy()
+    assert np.allclose(gradients[0], 0.0)
+    assert np.all(gradients[1] < 0.0)
+    assert np.all(gradients[2] > 0.0)
 
 
 def test_importance_sampling_strategy_trains_successfully() -> None:
@@ -319,6 +279,15 @@ def test_right_tail_probability_decreases_with_threshold(trained_estimator) -> N
     high_prob_ceil = 0.1
     assert np.all(tail_low >= high_prob_floor)
     assert np.all(tail_high <= high_prob_ceil)
+
+
+def test_left_expected_shortfall_is_below_lower_tail_quantile(trained_estimator) -> None:
+    estimator, X, _y, grid = trained_estimator
+    alpha = 0.9
+    lower_quantile = estimator.predict_quantile(X[:6], 1.0 - alpha, y_grid=grid)
+    es_values = estimator.expected_shortfall(X[:6], alpha=alpha, side="left", y_grid=grid)
+    assert lower_quantile.shape == es_values.shape == (6,)
+    assert np.all(es_values <= lower_quantile + 1e-6)
 
 
 def test_expected_shortfall_exceeds_quantile(trained_estimator) -> None:
