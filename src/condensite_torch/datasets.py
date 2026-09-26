@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
+from dataexcept import DataLoadingError, FileReadError, FileWriteError, wrapping
 from numpy.typing import NDArray
 
 try:  # pragma: no cover - optional dependency
@@ -41,17 +42,18 @@ def load_tabular(
 def save_csv(path: str | Path, rows: Sequence[dict[str, Any]]) -> None:
     """Write rows to CSV using pandas if available."""
     target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if pd is not None:
-        pd.DataFrame(rows).to_csv(target, index=False)
-        return
-    if not rows:
-        target.write_text("", encoding="utf-8")
-        return
-    with target.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(rows)
+    with wrapping((OSError, UnicodeError, csv.Error), FileWriteError, path=str(target)):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if pd is not None:
+            pd.DataFrame(rows).to_csv(target, index=False)
+            return
+        if not rows:
+            target.write_text("", encoding="utf-8")
+            return
+        with target.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(rows)
 
 
 def _resolve_format(path: str | Path, file_format: str) -> str:
@@ -78,7 +80,11 @@ def _load_delimited(  # noqa: PLR0914
     delimiter: str,
 ) -> tuple[ObjectArray, FloatArray | None, list[str]]:
     if pd is not None:
-        df = pd.read_csv(path, sep=delimiter)
+        with (
+            wrapping((OSError, UnicodeError), FileReadError, path=str(path)),
+            wrapping(pd.errors.ParserError, DataLoadingError, source=str(path)),
+        ):
+            df = pd.read_csv(path, sep=delimiter)
         y: FloatArray | None = None
         if target_column is not None:
             if target_column not in df.columns:
@@ -90,9 +96,10 @@ def _load_delimited(  # noqa: PLR0914
         X = df.astype(object).to_numpy(copy=True, dtype=object)
         return X, y, feature_names
 
-    with open(path, encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle, delimiter=delimiter)
-        rows = list(reader)
+    with wrapping((OSError, UnicodeError, csv.Error), FileReadError, path=str(path)):
+        with open(path, encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle, delimiter=delimiter)
+            rows = list(reader)
     if not rows:
         msg = "Delimited file is empty."
         raise ValueError(msg)
@@ -149,7 +156,11 @@ def _load_parquet(
     if pd is None:
         msg = "Reading Parquet requires pandas; install pandas to enable this format."
         raise RuntimeError(msg)
-    df = pd.read_parquet(path)
+    with (
+        wrapping((OSError, UnicodeError), FileReadError, path=str(path)),
+        wrapping(ValueError, DataLoadingError, source=str(path)),
+    ):
+        df = pd.read_parquet(path)
     y: FloatArray | None = None
     if target_column is not None:
         if target_column not in df.columns:
